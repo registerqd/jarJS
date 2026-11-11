@@ -4,10 +4,32 @@
 set -euo pipefail
 
 JARJS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-JAVA_HOME="${JAVA_HOME:-/data/jdk-21.0.13+9}"
-MVN="${MVN:-/data/apache-maven-3.9.16/bin/mvn}"
+
+# JDK：优先用环境变量，其次探测常见安装位置，最后用 PATH 里的 javac
+if [ -z "${JAVA_HOME:-}" ] || [ ! -x "${JAVA_HOME}/bin/javac" ]; then
+  if [ -x "/data/jdk-21.0.13+9/bin/javac" ]; then
+    JAVA_HOME="/data/jdk-21.0.13+9"
+  elif command -v javac >/dev/null 2>&1; then
+    JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+  else
+    echo "[JARJS] 找不到 JDK 21+，请先安装并设置 JAVA_HOME" >&2
+    exit 1
+  fi
+fi
 export JAVA_HOME
 export PATH="$JAVA_HOME/bin:$PATH"
+
+# Maven：环境变量 > 常见位置 > PATH
+if [ -z "${MVN:-}" ]; then
+  if [ -x "/data/apache-maven-3.9.16/bin/mvn" ]; then
+    MVN="/data/apache-maven-3.9.16/bin/mvn"
+  elif command -v mvn >/dev/null 2>&1; then
+    MVN="$(command -v mvn)"
+  else
+    echo "[JARJS] 找不到 Maven，请先安装并设置 MVN" >&2
+    exit 1
+  fi
+fi
 
 SHIM_JAR="$JARJS_HOME/shim/target/shim-1.0.jar"
 if [ ! -f "$SHIM_JAR" ]; then
