@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jarJS · Java JAR to WebGL Toolchain (Live Demos)</title>
+<style>
+:root {
+  --bg: #0a0e14;
+  --card-bg: #111822;
+  --card-border: #1e293b;
+  --card-hover: #2dd4bf;
+  --text: #f1f5f9;
+  --text-dim: #94a3b8;
+  --accent: #14b8a6;
+  --accent-glow: rgba(20, 184, 166, 0.25);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  padding: 60px 24px 40px;
+  text-align: center;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.badge {
+  display: inline-block;
+  padding: 4px 12px;
+  background: var(--accent-glow);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-bottom: 16px;
+}
+h1 {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 12px;
+  background: linear-gradient(135deg, #ffffff 40%, var(--accent) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+p.subtitle {
+  color: var(--text-dim);
+  font-size: 18px;
+  margin-bottom: 24px;
+}
+.hero-cta {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #042f2e;
+}
+.btn-primary:hover {
+  background: #2dd4bf;
+  box-shadow: 0 4px 20px var(--accent-glow);
+}
+.btn-secondary {
+  background: var(--card-bg);
+  color: var(--text);
+  border: 1px solid var(--card-border);
+}
+.btn-secondary:hover {
+  border-color: var(--text-dim);
+}
+
+main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 20px 24px 60px;
+  width: 100%;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+}
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+.card:hover {
+  transform: translateY(-4px);
+  border-color: var(--card-hover);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+.card.featured {
+  border-color: var(--accent);
+  box-shadow: 0 0 25px var(--accent-glow);
+}
+.card-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+.card.featured .card-tag {
+  background: var(--accent);
+  color: #042f2e;
+}
+.card h2 {
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+.card p {
+  color: var(--text-dim);
+  font-size: 14px;
+  margin-bottom: 20px;
+  flex-grow: 1;
+}
+.card .play-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: rgba(45, 212, 191, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+.card .play-btn:hover {
+  background: var(--accent);
+  color: #042f2e;
+}
+
+footer {
+  margin-top: auto;
+  text-align: center;
+  padding: 24px;
+  color: var(--text-dim);
+  font-size: 13px;
+  border-top: 1px solid var(--card-border);
+}
+footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="badge">v0.4 RELEASE · DUAL PIPELINE</div>
+  <h1>jarJS 在线试玩中心</h1>
+  <p class="subtitle">把 Java JAR 桌面游戏与 LWJGL 3D 工程，一键转译为单文件自包含 HTML，零 Native 依赖直接在浏览器运行。</p>
+  <div class="hero-cta">
+    <a class="btn btn-primary" href="https://github.com/registerqd/jarJS" target="_blank">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub 仓库
+    </a>
+    <code class="btn btn-secondary">git clone https://github.com/registerqd/jarJS.git</code>
+  </div>
+</header>
+
+<main>
+  <div class="grid">
+    <!-- Showcase 1: Voxel3D 沙盒世界 -->
+    <div class="card featured">
+      <div>
+        <span class="card-tag">⭐ 标志性名作 SHOWCASE</span>
+        <h2>VoxelCraft 3D 体素沙盒</h2>
+        <p>纯 Java LWJGL 编写的第一人称 3D 体素方块漫游。支持 WASD 行走漫游、鼠标转动视角、左键挖掘方块、右键放置方块，带 OpenAL 破坏音效，60 FPS 流畅运行。</p>
+      </div>
+      <a class="play-btn" href="voxel-gl.html">立即试玩体素沙盒 →</a>
+    </div>
+
+    <!-- Demo 2: 现代 GL20 着色器 -->
+    <div class="card">
+      <div>
+        <span class="card-tag">OpenGL 2.0+ 可编程管线</span>
+        <h2>GL20 等离子体动态着色器</h2>
+        <p>自定义 GLSL Vertex & Fragment Shader，VBO 顶点缓冲对象，动态 Uniform 传递时间与分辨率，呈现数学彩虹波纹与发光脉动环，全屏 42 万像素实时光栅化。</p>
+      </div>
+      <a class="play-btn" href="shader-gl.html">运行 GLSL 着色器 →</a>
+    </div>
+
+    <!-- Demo 3: 经典固定管线立方体 -->
+    <div class="card">
+      <div>
+        <span class="card-tag">OpenGL 1.1 经典固定管线</span>
+        <h2>三维光照立方体与棋盘地面</h2>
+        <p>经典立即模式（glBegin/glEnd）、三套矩阵栈、逐顶点 Blinn-Phong 光照（8 盏灯支持）、棋盘格程序化纹理与键盘交互漫游，零原生依赖跑在浏览器中。</p>
+      </div>
+      <a class="play-btn" href="cube-gl.html">查看 3D 立方体 →</a>
+    </div>
+
+    <!-- Demo 4: 多媒体系统 -->
+    <div class="card">
+      <div>
+        <span class="card-tag">全栈多媒体支持</span>
+        <h2>多媒体测试（音频/图像/字体）</h2>
+        <p>Base64 资源自动化内嵌打包、Web Audio API 模拟 OpenAL 声音回放、Canvas2D 代替 FreeType 进行矢量字形光栅化与纹理直传。</p>
+      </div>
+      <a class="play-btn" href="media-gl.html">体验多媒体演示 →</a>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <p>jarJS v0.4 由 registerqd 开源发布 · 遵循 MIT 协议 · <a href="https://github.com/registerqd/jarJS">GitHub 源码</a></p>
+</footer>
+
+</body>
+</html>

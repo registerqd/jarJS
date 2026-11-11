@@ -1,21 +1,19 @@
-# jarJS v0.4
+# jarJS v0.5
 
 把 Java jar 一键转成浏览器可运行单文件 HTML 的现代化工具链。
 
 支持 **双渲染管线**：既支持经典 OpenGL 1.1 固定管线（立即模式、矩阵栈、逐顶点光照），也支持现代 **OpenGL 2.0+ 可编程着色器管线**（GLSL 自定义顶点/片段着色器、VBO/IBO 顶点缓冲、动态 Uniform、FBO 离屏渲染）。
 
-v0.4 补齐了桌面游戏依赖的**三大 native 能力**，全部改为浏览器原生实现、构建时自动处理：
+---
 
-| 能力 | 桌面原生库 | jarJS 替代方案 | 是否自动 |
-|---|---|---|---|
-| 音频 | OpenAL（native） | **Web Audio API**：PCM 直接建 AudioBuffer，支持增益/音高/循环/声像 | ✅ 自动 |
-| 字体 | FreeType（native） | **Canvas2D 光栅化**：文字画到 canvas 后直接作纹理上传 | ✅ 自动 |
-| 图像/音频解码 | stb_image / libvorbis | **浏览器 Image + decodeAudioData** | ✅ 自动 |
-| 资源打包 | 文件系统读取 | **构建时扫描 jar，全部转 base64 内嵌** | ✅ 自动 |
+## 针对工业大作与复杂桌面游戏（Minecraft 1.8 / Netty / LibGDX 等）的四项基础设施更新 (v0.5)
 
-构建时 `bin/pack_assets.py` 会扫描 jar 内所有 `.png/.jpg/.ogg/.wav/.ttf/.fnt/.json/.glsl` 等资源，转成 `window.JARJS_ASSET_TABLE` 内嵌进 HTML；运行时 `jarjs.assets.Assets` / `ImageLoader` / `CanvasFont` / `AL10` 直接从内存取，**不发任何网络请求、不需要任何 native 库**。
-
-> 音频受浏览器自动播放策略限制：首次点击画面或按键后自动解锁（`AudioContext` 只在用户手势后创建，避免无手势环境下与 WebGL 争抢资源）。
+| 核心痛点 | 桌面原生依赖 | jarJS 解决方案 |
+|---|---|---|
+| **网络层 (Netty)** | `sun.misc.Unsafe`（堆外直接内存分配）与 `Selector` / `SocketChannel`（系统 Socket） | **虚拟页表内存分配器 (`jarjs.unsafe.Unsafe`)**：纯 Java 实现 `allocateMemory` / `copyMemory` / `getByte` / `putByte`，解除 Netty PlatformDependent 崩溃；搭配浏览器原生 **WebSocket 二进制网络桥** |
+| **音效系统 (Paulscode)** | `javax.sound.sampled.AudioFormat`、`Clip`、`AudioInputStream` 与 MIDI 背景音乐 | **Web Audio 直通 (`jarjs.sound.sampled.*`)**：JavaSound 与 Paulscode 指令直通 Web Audio API，包含 MIDI 兼容桩 |
+| **贴图动态解码** | `javax.imageio.ImageIO` 与 `BufferedImage`（同步读取贴图） | **纯 Java 零依赖 PNG 解码器 (`jarjs.imageio.ImageIO`)**：直接在内存中基于 Inflater 解压解析 IHDR/IDAT，支持 `BufferedImage.getRGB` / `getSubimage` 同步读取 |
+| **渲染扩展查询** | `GLContext.getCapabilities()`（检查 OpenGL 1.4~3.0 与 FBO/ARB 特性） | **特性常量全置 true (`ContextCapabilities`)**：预置 `OpenGL14`, `OpenGL20`, `GL_ARB_framebuffer_object` 等全部为 `true`，防止启动硬件检测直接闪退 |
 
 ---
 
@@ -23,45 +21,21 @@ v0.4 补齐了桌面游戏依赖的**三大 native 能力**，全部改为浏览
 
 jarJS 从立项之初就坚持一个原则：**不做难以理解的黑盒混淆，输出结构规整、模块分明、人类可读的高质量工程代码。**
 
-- **Java 侧 API 与 LWJGL 官方完全对齐**：所有方法签名、参数顺序、常量命名严格遵循 LWJGL 2.9.3 规范，代码带有完整的 Javadoc 与参数解释。无论是维护固定管线还是写 GLSL 着色器，代码逻辑清晰自然。
+- **Java 侧 API 与 LWJGL / JDK 官方完全对齐**：所有方法签名、参数顺序、常量命名严格遵循规范，代码带有完整的 Javadoc 与参数解释。
 - **纯增量、清晰的桥接分层**：
-  - `shim/src/main/java/jarjs/lwjgl/opengl/`：Java 侧统一 API 入口，提供类型安全和缓冲区打包；
-  - `runtime/jarjs-gl.js`：运行在浏览器的 WebGL 调度内核，未做任何混淆压缩，每个功能段均有清晰的模块注释，随时可以阅读、二次开发和排查。
-- **透明的自动降级预处理**：桌面游戏里的 GLSL（如 `#version 120`、缺少 `precision` 声明）在进入 WebGL 前自动完成合规性转换，保证运行效率的同时降低移植门槛。
-
----
-
-## 架构
-
-```
-                   用户编写的 Java 桌面游戏 / 工具 (JAR)
-                                     │
-                 [maven-shade 重定位：org.lwjgl → jarjs.lwjgl]
-                                     │
-        ┌────────────────────────────┴────────────────────────────┐
-        ▼                                                         ▼
-【经典固定管线 (GL 1.1)】                                【现代着色器管线 (GL 2.0+)】
-  - 矩阵栈 (ModelView / Proj / Tex)                        - 自定义 GLSL Vertex / Fragment Shader
-  - 立即模式 (glBegin / glEnd)                             - VBO / IBO 顶点缓冲 (GL15)
-  - 逐顶点 Blinn-Phong 光照 (8 盏灯)                       - 动态 Uniform 交互 (矩阵 / 浮点 / 向量)
-  - 图元自动三角化 (QUADS / POLYGON)                        - 顶点属性指针 (glVertexAttribPointer)
-  - 顶点数组与显示列表                                     - 多重纹理 (GL13) 与高级混合 (GL14)
-        │                                                         │
-        └────────────────────────────┬────────────────────────────┘
-                                     ▼
-                      GLBackend (@JSBody 跨语言直通桥)
-                                     ▼
-                   runtime/jarjs-gl.js (原生 WebGL 1.0 驱动)
-                                     ▼
-                    浏览器单文件 HTML (Canvas + WebGL)
-```
+  - `shim/src/main/java/jarjs/lwjgl/opengl/`：GL11, GL13, GL14, GL15, GL20, GL30, GLContext；
+  - `shim/src/main/java/jarjs/unsafe/`：纯 Java 实现的内存分配页表；
+  - `shim/src/main/java/jarjs/imageio/`：纯 Java 同步贴图解码器；
+  - `shim/src/main/java/jarjs/sound/`：JavaSound 到 Web Audio 直通；
+  - `runtime/jarjs-gl.js` & `runtime/jarjs-media.js`：运行在浏览器的 WebGL 与 Web Audio 驱动内核。
+- **资源自动化 Base64 流水线**：构建时 `bin/pack_assets.py` 扫描 jar 内所有贴图、音频、字体，转成 Base64 内嵌进 HTML，运行时纯内存读取，**零网络请求、零 Native 依赖**。
 
 ---
 
 ## 快速上手
 
 ### 环境要求
-- **JDK 21+**（编译支持 Java 21+ 现代语法与记录类型）
+- **JDK 21+**
 - **Maven 3.9+**
 - **Python 3**
 
@@ -82,42 +56,14 @@ bash bin/jarjs.sh build mygame.jar -o mygame.html --lenient
 
 ---
 
-## 内置验证工程（Demos）
+## 在线演示 (Live Demos)
 
-仓库内置了两个经过真实浏览器自动化回归测试的高质量工程：
-
-### 1. 经典固定管线立方体 (`demo-gl`)
-- **技术栈**：LWJGL 2.9.3、立即模式、光照、棋盘格生成纹理、透视投影矩阵、键盘移动相机。
-- **源码**：`demo-gl/src/main/java/demo/CubeDemo.java`
-- **运行效果**：三维光照立方体在棋盘地面上自由旋转，键盘实时操控，60 FPS。
-
-### 2. 现代 GLSL 等离子体着色器 (`demo-shader`)
-- **技术栈**：LWJGL 2.9.3、GL20 自定义顶点/片段着色器、GL15 顶点缓冲对象 (VBO)、动态 Uniform 传递时间与分辨率、全屏 Quad 渲染。
-- **源码**：`demo-shader/src/main/java/demo/ShaderDemo.java`
-- **运行效果**：全屏数学动态等离子体彩虹色轮流动，中央脉动发光光环，键盘空格暂停/继续，左右方向键变速。
-
----
-
-## 支持的 API 矩阵
-
-| 模块 | 核心 API / 常量 | 说明 |
+| 演示项目 | 核心技术 | 体验入口 |
 |---|---|---|
-| **GL20 (着色器)** | `glCreateShader`, `glShaderSource`, `glCompileShader`, `glCreateProgram`, `glAttachShader`, `glLinkProgram`, `glUseProgram`, `glGetUniformLocation`, `glUniform*`, `glGetAttribLocation`, `glEnableVertexAttribArray`, `glVertexAttribPointer` | 原生 WebGL 1:1 直通，带 GLSL 自动预处理 |
-| **GL15 (缓冲对象)** | `glGenBuffers`, `glBindBuffer`, `glBufferData`, `glBufferSubData`, `glDeleteBuffers`, `GL_ARRAY_BUFFER`, `GL_ELEMENT_ARRAY_BUFFER` | 原生 WebGLBuffer 支持 |
-| **GL14 (混合高级)** | `glBlendFuncSeparate`, `glBlendEquation`, `GL_FUNC_ADD`, `GL_FUNC_SUBTRACT` | 混合方程与通道分离 |
-| **GL13 (多重纹理)** | `glActiveTexture`, `GL_TEXTURE0` ~ `GL_TEXTURE31` | 多纹理单元切换 |
-| **GL11 (固定管线)** | `glBegin`, `glEnd`, `glVertex*`, `glColor*`, `glNormal*`, `glTexCoord*`, `glMatrixMode`, `glPushMatrix`, `glPopMatrix`, `glLight*`, `glMaterial*`, `glEnableClientState`, `glDrawArrays` | Java 侧完整固定管线仿真 |
-| **GL30 (帧缓冲)** | `glGenFramebuffers`, `glBindFramebuffer`, `glFramebufferTexture2D`, `glCheckFramebufferStatus` | 离屏渲染与后处理支持 |
-| **LWJGL 外壳** | `Display` (create/update/sync), `DisplayMode`, `Keyboard`, `Mouse`, `Timer`, `Sys`, `BufferUtils` | 桌面事件与时钟循环映射到浏览器事件循环 |
-
----
-
-## 边界与演进方向
-
-1. **GLSL 规范**：当前原生对标 WebGL 1.0（OpenGL ES 2.0）。高版本特有语法（如 3.0+ 的多重渲染目标 MRT、Compute Shader）不在本阶段射程内。
-2. **大作适配路线**：
-   - 经典固定管线游戏（Quake 2 / Jake2 风格）已完全具备运行条件；
-   - 基于 libGDX / 自定义着色器的现代独立游戏，基础着色器管线已就绪，后续将逐步完善音频 OpenAL 桥接与输入系统。
+| **VoxelCraft 3D 体素沙盒** | 第一人称 3D 漫游、体素地形、挖方块、放方块、OpenAL 音效 | [在线体验](docs/voxel-gl.html) |
+| **GL20 等离子体动态着色器** | 自定义 GLSL Vertex/Fragment Shader、VBO 缓冲、动态 Uniform | [在线体验](docs/shader-gl.html) |
+| **经典固定管线立方体** | 立即模式、三套矩阵栈、逐顶点 Blinn-Phong 光照 (8 盏灯) | [在线体验](docs/cube-gl.html) |
+| **全栈多媒体演示** | Base64 资源内嵌、Web Audio 播放、Canvas2D 矢量文字直传 | [在线体验](docs/media-gl.html) |
 
 ---
 
@@ -126,19 +72,26 @@ bash bin/jarjs.sh build mygame.jar -o mygame.html --lenient
 ```
 jarJS/
 ├── bin/
-│   ├── jarjs.sh          # 主构建 CLI 入口（自动探测 JDK 21+ 与 Maven）
-│   ├── assemble.py       # 将 TeaVM 输出与 WebGL 内核组装为单文件 HTML
+│   ├── jarjs.sh          # 主构建 CLI（自动探测环境，集成 Shade 重定位）
+│   ├── assemble.py       # 将 TeaVM 输出与 WebGL/WebAudio 内核组装为单文件 HTML
+│   ├── pack_assets.py    # 扫描 jar 并将资源打包为 Base64 内嵌表
 │   └── lenient.py        # 宽松插桩引擎（两级缺失类/方法自动补桩）
 ├── shim/                 # 兼容层 Java 源码
-│   └── src/main/java/jarjs/lwjgl/
-│       ├── opengl/       # GL11, GL13, GL14, GL15, GL20, GL30 核心实现
-│       ├── input/        # Keyboard, Mouse 键鼠事件模拟
-│       └── util/         # GLU, Timer, BufferUtils 工具库
+│   └── src/main/java/jarjs/
+│       ├── lwjgl/opengl/ # GL11, GL13, GL14, GL15, GL20, GL30, GLContext
+│       ├── unsafe/       # sun.misc.Unsafe 内存分配页表
+│       ├── imageio/      # ImageIO 与纯 Java PNG 同步解码器
+│       ├── sound/        # javax.sound.sampled 与 MIDI 模块
+│       ├── net/          # WebSocket 二进制网络桥
+│       └── font/         # Canvas2D 矢量文字光栅化
 ├── runtime/
-│   └── jarjs-gl.js       # 浏览器 WebGL 运行时驱动（双管线核心，结构清晰可读）
-├── demo-gl/              # 固定管线立方体验证工程
-├── demo-shader/          # 现代可编程着色器验证工程
-├── demo2/                # Swing 俄罗斯方块验证工程
+│   ├── jarjs-gl.js       # 双管线 WebGL 驱动内核
+│   └── jarjs-media.js    # Web Audio、Image、Canvas 驱动
+├── docs/                 # GitHub Pages 在线演示站点
+├── demo-voxel/           # 3D 体素微型沙盒工程
+├── demo-shader/          # 现代 GL20 着色器演示工程
+├── demo-gl/              # 经典固定管线演示工程
+├── demo-media/           # 多媒体系统演示工程
 ├── LICENSE               # MIT 开源协议
 └── README.md
 ```

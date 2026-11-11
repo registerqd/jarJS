@@ -126,6 +126,9 @@ cat > "$WORK/pom.xml" <<POM
             <relocations>
               <relocation><pattern>org.lwjgl</pattern><shadedPattern>jarjs.lwjgl</shadedPattern></relocation>
               <relocation><pattern>javax.swing</pattern><shadedPattern>jarjs.swing</shadedPattern></relocation>
+              <relocation><pattern>javax.imageio</pattern><shadedPattern>jarjs.imageio</shadedPattern></relocation>
+              <relocation><pattern>javax.sound</pattern><shadedPattern>jarjs.sound</shadedPattern></relocation>
+              <relocation><pattern>sun.misc.Unsafe</pattern><shadedPattern>jarjs.unsafe.Unsafe</shadedPattern></relocation>
               <relocation><pattern>java.awt</pattern><shadedPattern>jarjs.awt</shadedPattern></relocation>
               <relocation><pattern>java.util.concurrent.locks</pattern><shadedPattern>jarjs.juc.locks</shadedPattern></relocation>
               <relocation><pattern>java.util.concurrent.Executors</pattern><shadedPattern>jarjs.juc.Executors</shadedPattern></relocation>

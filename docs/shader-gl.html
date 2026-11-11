@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta name="AIGC" content='{"Label":"1","ContentProducer":"001191340000711771143J00000","ProduceID":"6940733e-8b9f-41a0-b7f5-051d709272ba-735b13a5","ReservedCode1":"","ContentPropagator":"001191340000711771143J00000","PropagateID":"6940733e-8b9f-41a0-b7f5-051d709272ba-735b13a5","ReservedCode2":""}'>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>demo.ShaderDemo · JARJS</title>
+<style>
+html,body{margin:0;height:100%;background:#0b0f14;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,-apple-system,sans-serif;overflow:hidden}
+#game{display:block;border-radius:8px;box-shadow:0 10px 40px rgba(0,0,0,.6);background:#000;image-rendering:auto}
+#tip{margin-top:12px;color:#5a6472;font-size:12px;letter-spacing:.02em}
+</style>
+</head>
+<body>
+<canvas id="game" width="760" height="560"></canvas>
+<div id="tip">由 JARJS 转译 · 键盘操作</div>
+<script>
+/* JARJS OpenGL → WebGL 运行时 (v0.3 - 含现代可编程管线)
+ * 职责：
+ * 1. 完整保持固定管线内置 Shader 和图元绘制后端（GL 1.1 语义）
+ * 2. 纯增量提供现代管线桥接（GL 2.0 / 1.5 / 1.4 / 1.3 / 3.0：Shader, Program, Uniform, Attrib, VBO, FBO）
+ * 3. 桌面 GLSL 自动预处理
+ */
+(function () {
+  'use strict';
+
+  var G = {};
+  window.JARJS_GL = G;
+
+  var canvas = null;
+  var gl = null;
+  var prog = null;
+  var loc = {};
+  var vbo = null;
+  var textures = {};
+  var dpr = 1;
+  var W = 480, H = 480;
+
+  var keys = {};
+  var keyQueue = [];
+  var mouse = { x: 0, y: 0, dx: 0, dy: 0, buttons: {}, queue: [], grabbed: false };
+  var closeRequested = false;
+  var lost = false;
+
+  // ---------- 固定管线内置着色器 ----------
+  var VS = [
+    'attribute vec3 aPos;',
+    'attribute vec4 aColor;',
+    'attribute vec2 aUV;',
+    'uniform mat4 uMVP;',
+    'varying vec4 vColor;',
+    'varying vec2 vUV;',
+    'void main() {',
+    '  gl_Position = uMVP * vec4(aPos, 1.0);',
+    '  vColor = aColor;',
+    '  vUV = aUV;',
+    '}'
+  ].join('\n');
+
+  var FS = [
+    'precision mediump float;',
+    'uniform sampler2D uTex;',
+    'uniform float uUseTex;',
+    'varying vec4 vColor;',
+    'varying vec2 vUV;',
+    'void main() {',
+    '  vec4 c = vColor;',
+    '  if (uUseTex > 0.5) { c *= texture2D(uTex, vUV); }',
+    '  if (c.a < 0.004) discard;',
+    '  gl_FragColor = c;',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('[JARJS GL] 内置 shader 编译失败: ' + gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  }
+
+  G.init = function (w, h, d) {
+    canvas = document.getElementById('game');
+    if (!canvas) { console.error('[JARJS GL] 页面缺少 canvas#game'); return 0; }
+    try {
+      gl = canvas.getContext('webgl', {
+        antialias: true, alpha: false, depth: true, stencil: false,
+        preserveDrawingBuffer: true, premultipliedAlpha: false
+      }) || canvas.getContext('experimental-webgl', { preserveDrawingBuffer: true });
+    } catch (e) { gl = null; }
+    if (!gl) { console.error('[JARJS GL] 当前浏览器不支持 WebGL'); return 0; }
+
+    dpr = d || 1;
+    if (dpr <= 0) dpr = 1;
+    W = w; H = h;
+    applySize();
+
+    var vs = compile(gl.VERTEX_SHADER, VS);
+    var fs = compile(gl.FRAGMENT_SHADER, FS);
+    if (!vs || !fs) return 0;
+    prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error('[JARJS GL] 内置 program 链接失败: ' + gl.getProgramInfoLog(prog));
+      return 0;
+    }
+    gl.useProgram(prog);
+
+    loc.pos = gl.getAttribLocation(prog, 'aPos');
+    loc.color = gl.getAttribLocation(prog, 'aColor');
+    loc.uv = gl.getAttribLocation(prog, 'aUV');
+    loc.mvp = gl.getUniformLocation(prog, 'uMVP');
+    loc.tex = gl.getUniformLocation(prog, 'uTex');
+    loc.useTex = gl.getUniformLocation(prog, 'uUseTex');
+
+    vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.enableVertexAttribArray(loc.pos);
+    gl.enableVertexAttribArray(loc.color);
+    gl.enableVertexAttribArray(loc.uv);
+    var stride = 9 * 4;
+    gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, stride, 0);
+    gl.vertexAttribPointer(loc.color, 4, gl.FLOAT, false, stride, 12);
+    gl.vertexAttribPointer(loc.uv, 2, gl.FLOAT, false, stride, 28);
+
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+
+    canvas.addEventListener('webglcontextlost', function (e) {
+      e.preventDefault(); lost = true; console.warn('[JARJS GL] WebGL 上下文丢失');
+    }, false);
+    canvas.addEventListener('webglcontextrestored', function () {
+      lost = false; console.warn('[JARJS GL] WebGL 上下文已恢复');
+      for (var k in textures) { if (textures.hasOwnProperty(k)) textures[k].dirty = true; }
+    }, false);
+
+    installInput();
+    return 1;
+  };
+
+  function applySize() {
+    if (!canvas) return;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+
+  G.setSize = function (w, h, title) {
+    W = w; H = h;
+    applySize();
+    if (title) document.title = title;
+  };
+
+  G.setVSync = function (v) {};
+  G.contextLost = function () { return lost; };
+
+  G.clear = function (r, g, b, a, mask) {
+    if (!gl) return;
+    gl.clearColor(r, g, b, a);
+    var bits = 0;
+    if (mask & 0x4000) bits |= gl.COLOR_BUFFER_BIT;
+    if (mask & 0x0100) bits |= gl.DEPTH_BUFFER_BIT;
+    if (mask & 0x0400) bits |= gl.STENCIL_BUFFER_BIT;
+    if (bits === 0) bits = gl.COLOR_BUFFER_BIT;
+    gl.clear(bits);
+  };
+
+  var curFlags = -1;
+  G.setState = function (flags) {
+    if (!gl) return;
+    if (flags === curFlags) return;
+    curFlags = flags;
+    if (flags & 1) { gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); }
+    else { gl.disable(gl.DEPTH_TEST); }
+    if (flags & 2) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); }
+    else { gl.disable(gl.BLEND); }
+    if (flags & 4) { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
+    else { gl.disable(gl.CULL_FACE); }
+  };
+
+  G.blendFunc = function (src, dst) { if (gl) gl.blendFunc(src, dst); };
+  G.blendFuncSeparate = function (sR, dR, sA, dA) { if (gl) gl.blendFuncSeparate(sR, dR, sA, dA); };
+  G.blendEquation = function (mode) { if (gl) gl.blendEquation(mode); };
+  G.lineWidth = function (w) { if (gl) gl.lineWidth(w); };
+  G.pointSize = function (s) {};
+  G.viewport = function (x, y, w, h) { if (gl) gl.viewport(x, y, w, h); };
+  G.scissor = function (x, y, w, h) { if (gl) gl.scissor(x, y, w, h); };
+  G.enable = function (cap) { if (gl) gl.enable(cap); };
+  G.disable = function (cap) { if (gl) gl.disable(cap); };
+  G.depthFunc = function (f) { if (gl) gl.depthFunc(f); };
+  G.depthMask = function (m) { if (gl) gl.depthMask(!!m); };
+  G.colorMask = function (r, g, b, a) { if (gl) gl.colorMask(!!r, !!g, !!b, !!a); };
+  G.cullFace = function (m) { if (gl) gl.cullFace(m); };
+  G.frontFace = function (m) { if (gl) gl.frontFace(m); };
+
+  // ---------- 固定管线立即模式提交 ----------
+  G.draw = function (mode, verts, count, mvp, texId, flags) {
+    if (!gl || !prog || count <= 0) return;
+    gl.useProgram(prog);
+
+    var n = count * 9;
+    var data;
+    if (verts.length === n) {
+      data = new Float32Array(verts);
+    } else {
+      data = new Float32Array(n);
+      for (var i = 0; i < n; i++) data[i] = verts[i];
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+
+    // 确保固定管线属性槽位正确
+    gl.enableVertexAttribArray(loc.pos);
+    gl.enableVertexAttribArray(loc.color);
+    gl.enableVertexAttribArray(loc.uv);
+    var stride = 9 * 4;
+    gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, stride, 0);
+    gl.vertexAttribPointer(loc.color, 4, gl.FLOAT, false, stride, 12);
+    gl.vertexAttribPointer(loc.uv, 2, gl.FLOAT, false, stride, 28);
+
+    gl.uniformMatrix4fv(loc.mvp, false, new Float32Array(mvp));
+
+    var useTex = (flags & 8) ? 1 : 0;
+    if (useTex) {
+      var t = textures[texId];
+      if (!t) { useTex = 0; }
+      else {
+        if (t.dirty) uploadTexture(texId, t);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, t.tex);
+        gl.uniform1i(loc.tex, 0);
+      }
+    }
+    gl.uniform1f(loc.useTex, useTex);
+
+    gl.drawArrays(mode, 0, count);
+  };
+
+  // ---------- 纹理管理 ----------
+  function uploadTexture(id, t) {
+    if (!t || !t.pixels) { t && (t.dirty = false); return; }
+    if (!t.tex) t.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, t.w, t.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, t.pixels);
+    var mag = (t.filter === 0x2600) ? gl.NEAREST : gl.LINEAR;
+    var min = mag;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, mag);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min);
+    var wrap = (t.wrap === 0x2900 || t.wrap === 0x812F) ? gl.CLAMP_TO_EDGE : gl.REPEAT;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+    t.dirty = false;
+  }
+
+  G.texImage = function (id, w, h, argb, filter, wrap) {
+    if (!gl || !argb) return;
+    var px = new Uint8Array(w * h * 4);
+    for (var i = 0; i < w * h; i++) {
+      var v = argb[i] | 0;
+      px[i * 4] = (v >> 16) & 255;
+      px[i * 4 + 1] = (v >> 8) & 255;
+      px[i * 4 + 2] = v & 255;
+      px[i * 4 + 3] = (v >>> 24) & 255;
+    }
+    var t = textures[id] || (textures[id] = {});
+    t.w = w; t.h = h; t.pixels = px; t.filter = filter; t.wrap = wrap; t.dirty = true;
+    uploadTexture(id, t);
+  };
+
+  G.deleteTexture = function (id) {
+    var t = textures[id];
+    if (t && t.tex && gl) gl.deleteTexture(t.tex);
+    delete textures[id];
+  };
+
+  G.isTextureReady = function (id) { return !!textures[id]; };
+
+  G.bindTexture = function (target, id) {
+    if (!gl) return;
+    var t = textures[id];
+    gl.bindTexture(target || gl.TEXTURE_2D, t ? t.tex : null);
+  };
+
+  G.activeTexture = function (unit) {
+    if (!gl) return;
+    var idx = (unit >= 0x84C0) ? (unit - 0x84C0) : unit;
+    gl.activeTexture(gl.TEXTURE0 + idx);
+  };
+
+  // ==============================================================
+  // ---------- 现代 OpenGL 2.0+ 着色器管线纯增量扩展 ----------
+  // ==============================================================
+
+  var nextShaderId = 1, shaders = {};
+  var nextProgId = 1, programs = {};
+  var nextLocId = 1, locations = {};
+  var nextBufId = 1, buffers = {};
+  var nextFboId = 1, framebuffers = {};
+
+  function preprocessGLSL(src, type) {
+    if (!src) return '';
+    var s = src.replace(/^\s*#version\s+\d+.*$/gm, '');
+    if (type === 0x8B30) { // FRAGMENT_SHADER
+      if (!/precision\s+(mediump|highp|lowp)\s+float;/.test(s)) {
+        s = 'precision mediump float;\n' + s;
+      }
+    }
+    return s;
+  }
+
+  G.createShader = function (type) {
+    if (!gl) return 0;
+    var s = gl.createShader(type);
+    if (!s) return 0;
+    var id = nextShaderId++;
+    shaders[id] = { obj: s, type: type, src: '', log: '' };
+    return id;
+  };
+
+  G.shaderSource = function (id, src) {
+    var s = shaders[id];
+    if (s) s.src = src;
+  };
+
+  G.compileShader = function (id) {
+    var s = shaders[id];
+    if (!s || !gl) return;
+    var processed = preprocessGLSL(s.src, s.type);
+    gl.shaderSource(s.obj, processed);
+    gl.compileShader(s.obj);
+    var ok = gl.getShaderParameter(s.obj, gl.COMPILE_STATUS);
+    s.log = gl.getShaderInfoLog(s.obj) || '';
+    if (!ok) console.error('[JARJS GL] Shader 编译错误: ' + s.log + '\n源码:\n' + processed);
+  };
+
+  G.getShaderi = function (id, pname) {
+    var s = shaders[id];
+    if (!s || !gl) return 0;
+    if (pname === 0x8B81) return gl.getShaderParameter(s.obj, gl.COMPILE_STATUS) ? 1 : 0;
+    if (pname === 0x8B84) return (s.log ? s.log.length + 1 : 0);
+    if (pname === 0x8B4F) return s.type;
+    return 0;
+  };
+
+  G.getShaderInfoLog = function (id) {
+    var s = shaders[id];
+    return s ? (s.log || gl.getShaderInfoLog(s.obj) || '') : '';
+  };
+
+  G.deleteShader = function (id) {
+    var s = shaders[id];
+    if (s && gl) gl.deleteShader(s.obj);
+    delete shaders[id];
+  };
+
+  // Program
+  G.createProgram = function () {
+    if (!gl) return 0;
+    var p = gl.createProgram();
+    if (!p) return 0;
+    var id = nextProgId++;
+    programs[id] = { obj: p, log: '' };
+    return id;
+  };
+
+  G.attachShader = function (pid, sid) {
+    var p = programs[pid], s = shaders[sid];
+    if (p && s && gl) gl.attachShader(p.obj, s.obj);
+  };
+
+  G.detachShader = function (pid, sid) {
+    var p = programs[pid], s = shaders[sid];
+    if (p && s && gl) gl.detachShader(p.obj, s.obj);
+  };
+
+  G.linkProgram = function (pid) {
+    var p = programs[pid];
+    if (!p || !gl) return;
+    gl.linkProgram(p.obj);
+    var ok = gl.getProgramParameter(p.obj, gl.LINK_STATUS);
+    p.log = gl.getProgramInfoLog(p.obj) || '';
+    if (!ok) console.error('[JARJS GL] Program 链接错误: ' + p.log);
+  };
+
+  G.validateProgram = function (pid) {
+    var p = programs[pid];
+    if (p && gl) { gl.validateProgram(p.obj); p.log = gl.getProgramInfoLog(p.obj) || ''; }
+  };
+
+  G.getProgrami = function (pid, pname) {
+    var p = programs[pid];
+    if (!p || !gl) return 0;
+    if (pname === 0x8B82) return gl.getProgramParameter(p.obj, gl.LINK_STATUS) ? 1 : 0;
+    if (pname === 0x8B83) return gl.getProgramParameter(p.obj, gl.VALIDATE_STATUS) ? 1 : 0;
+    if (pname === 0x8B84) return (p.log ? p.log.length + 1 : 0);
+    return 0;
+  };
+
+  G.getProgramInfoLog = function (pid) {
+    var p = programs[pid];
+    return p ? (p.log || gl.getProgramInfoLog(p.obj) || '') : '';
+  };
+
+  G.useProgram = function (pid) {
+    if (!gl) return;
+    if (pid === 0) {
+      if (prog) gl.useProgram(prog);
+    } else {
+      var p = programs[pid];
+      if (p) gl.useProgram(p.obj);
+    }
+  };
+
+  G.deleteProgram = function (pid) {
+    var p = programs[pid];
+    if (p && gl) gl.deleteProgram(p.obj);
+    delete programs[pid];
+  };
+
+  // Uniform
+  G.getUniformLocation = function (pid, name) {
+    var p = programs[pid];
+    if (!p || !gl) return -1;
+    var uLoc = gl.getUniformLocation(p.obj, name);
+    if (uLoc === null) return -1;
+    var lid = nextLocId++;
+    locations[lid] = uLoc;
+    return lid;
+  };
+
+  G.uniform1i = function (lid, v) { var l = locations[lid]; if (l && gl) gl.uniform1i(l, v); };
+  G.uniform2i = function (lid, v0, v1) { var l = locations[lid]; if (l && gl) gl.uniform2i(l, v0, v1); };
+  G.uniform3i = function (lid, v0, v1, v2) { var l = locations[lid]; if (l && gl) gl.uniform3i(l, v0, v1, v2); };
+  G.uniform4i = function (lid, v0, v1, v2, v3) { var l = locations[lid]; if (l && gl) gl.uniform4i(l, v0, v1, v2, v3); };
+
+  G.uniform1f = function (lid, v) { var l = locations[lid]; if (l && gl) gl.uniform1f(l, v); };
+  G.uniform2f = function (lid, v0, v1) { var l = locations[lid]; if (l && gl) gl.uniform2f(l, v0, v1); };
+  G.uniform3f = function (lid, v0, v1, v2) { var l = locations[lid]; if (l && gl) gl.uniform3f(l, v0, v1, v2); };
+  G.uniform4f = function (lid, v0, v1, v2, v3) { var l = locations[lid]; if (l && gl) gl.uniform4f(l, v0, v1, v2, v3); };
+
+  G.uniform1fv = function (lid, arr) { var l = locations[lid]; if (l && gl) gl.uniform1fv(l, new Float32Array(arr)); };
+  G.uniform2fv = function (lid, arr) { var l = locations[lid]; if (l && gl) gl.uniform2fv(l, new Float32Array(arr)); };
+  G.uniform3fv = function (lid, arr) { var l = locations[lid]; if (l && gl) gl.uniform3fv(l, new Float32Array(arr)); };
+  G.uniform4fv = function (lid, arr) { var l = locations[lid]; if (l && gl) gl.uniform4fv(l, new Float32Array(arr)); };
+
+  G.uniformMatrix2fv = function (lid, t, m) { var l = locations[lid]; if (l && gl) gl.uniformMatrix2fv(l, !!t, new Float32Array(m)); };
+  G.uniformMatrix3fv = function (lid, t, m) { var l = locations[lid]; if (l && gl) gl.uniformMatrix3fv(l, !!t, new Float32Array(m)); };
+  G.uniformMatrix4fv = function (lid, t, m) { var l = locations[lid]; if (l && gl) gl.uniformMatrix4fv(l, !!t, new Float32Array(m)); };
+
+  // Attribute
+  G.getAttribLocation = function (pid, name) {
+    var p = programs[pid];
+    return (p && gl) ? gl.getAttribLocation(p.obj, name) : -1;
+  };
+
+  G.bindAttribLocation = function (pid, index, name) {
+    var p = programs[pid];
+    if (p && gl) gl.bindAttribLocation(p.obj, index, name);
+  };
+
+  G.enableVertexAttribArray = function (idx) { if (gl) gl.enableVertexAttribArray(idx); };
+  G.disableVertexAttribArray = function (idx) { if (gl) gl.disableVertexAttribArray(idx); };
+
+  G.vertexAttribPointer = function (idx, size, type, norm, stride, offset) {
+    if (gl) gl.vertexAttribPointer(idx, size, type, !!norm, stride, offset);
+  };
+
+  G.vertexAttrib1f = function (idx, x) { if (gl) gl.vertexAttrib1f(idx, x); };
+  G.vertexAttrib2f = function (idx, x, y) { if (gl) gl.vertexAttrib2f(idx, x, y); };
+  G.vertexAttrib3f = function (idx, x, y, z) { if (gl) gl.vertexAttrib3f(idx, x, y, z); };
+  G.vertexAttrib4f = function (idx, x, y, z, w) { if (gl) gl.vertexAttrib4f(idx, x, y, z, w); };
+
+  // Buffer Objects (GL15)
+  G.createBuffer = function () {
+    if (!gl) return 0;
+    var b = gl.createBuffer();
+    if (!b) return 0;
+    var id = nextBufId++;
+    buffers[id] = b;
+    return id;
+  };
+
+  G.bindBuffer = function (target, id) {
+    if (!gl) return;
+    gl.bindBuffer(target, id ? buffers[id] : null);
+  };
+
+  G.bufferDataFloat = function (target, arr, usage) {
+    if (!gl) return;
+    gl.bufferData(target, new Float32Array(arr), usage);
+  };
+
+  G.bufferDataInt = function (target, arr, usage) {
+    if (!gl) return;
+    gl.bufferData(target, new Int32Array(arr), usage);
+  };
+
+  G.bufferDataShort = function (target, arr, usage) {
+    if (!gl) return;
+    gl.bufferData(target, new Int16Array(arr), usage);
+  };
+
+  G.bufferDataByte = function (target, arr, usage) {
+    if (!gl) return;
+    gl.bufferData(target, new Uint8Array(arr), usage);
+  };
+
+  G.bufferSubDataFloat = function (target, offset, arr) {
+    if (!gl) return;
+    gl.bufferSubData(target, offset, new Float32Array(arr));
+  };
+
+  G.deleteBuffer = function (id) {
+    var b = buffers[id];
+    if (b && gl) gl.deleteBuffer(b);
+    delete buffers[id];
+  };
+
+  // 原生 Draw
+  G.drawArraysNative = function (mode, first, count) {
+    if (gl && count > 0) gl.drawArrays(mode, first, count);
+  };
+
+  G.drawElementsNative = function (mode, count, type, offset) {
+    if (gl && count > 0) gl.drawElements(mode, count, type, offset);
+  };
+
+  // Framebuffer (GL30)
+  G.createFramebuffer = function () {
+    if (!gl) return 0;
+    var fb = gl.createFramebuffer();
+    if (!fb) return 0;
+    var id = nextFboId++;
+    framebuffers[id] = fb;
+    return id;
+  };
+
+  G.bindFramebuffer = function (target, id) {
+    if (!gl) return;
+    gl.bindFramebuffer(target, id ? framebuffers[id] : null);
+  };
+
+  G.framebufferTexture2D = function (target, attach, textarget, texId, level) {
+    if (!gl) return;
+    var t = textures[texId];
+    gl.framebufferTexture2D(target, attach, textarget, t ? t.tex : null, level);
+  };
+
+  G.checkFramebufferStatus = function (target) {
+    return gl ? gl.checkFramebufferStatus(target) : 0;
+  };
+
+  G.deleteFramebuffer = function (id) {
+    var fb = framebuffers[id];
+    if (fb && gl) gl.deleteFramebuffer(fb);
+    delete framebuffers[id];
+  };
+
+  // ---------- 查询与系统 ----------
+  G.getString = function (name) {
+    if (!gl) return 'JARJS-GL (no context)';
+    if (name === 0x1F00) return gl.getParameter(gl.VENDOR) || 'WebGL';
+    if (name === 0x1F01) return gl.getParameter(gl.RENDERER) || 'WebGL';
+    if (name === 0x1F02) return 'OpenGL ES 2.0 (JARJS 现代管线兼容层)';
+    if (name === 0x1F03) return (gl.getSupportedExtensions() || []).join(' ');
+    if (name === 0x8B8C) return gl.getParameter(gl.SHADING_LANGUAGE_VERSION) || 'WebGL GLSL ES 1.0';
+    return '';
+  };
+
+  G.getError = function () { return gl ? gl.getError() : 0; };
+  G.closeRequested = function () { return closeRequested; };
+  G.requestClose = function () { closeRequested = true; };
+
+  // ---------- 输入 ----------
+  var KEYMAP = {
+    8: 14, 9: 15, 12: 0x4C, 13: 28, 16: 42, 17: 29, 18: 56, 19: 197,
+    20: 58, 27: 1, 32: 57, 33: 201, 34: 209, 35: 207, 36: 199, 37: 203,
+    38: 200, 39: 205, 40: 208, 45: 210, 46: 211,
+    48: 11, 49: 2, 50: 3, 51: 4, 52: 5, 53: 6, 54: 7, 55: 8, 56: 9, 57: 10,
+    65: 30, 66: 48, 67: 46, 68: 32, 69: 18, 70: 33, 71: 34, 72: 35, 73: 23,
+    74: 36, 75: 37, 76: 38, 77: 50, 78: 49, 79: 24, 80: 25, 81: 16, 82: 19,
+    83: 31, 84: 20, 85: 22, 86: 47, 87: 17, 88: 45, 89: 21, 90: 44,
+    91: 219, 92: 220, 93: 221,
+    96: 82, 97: 79, 98: 80, 99: 81, 100: 75, 101: 76, 102: 77, 103: 71,
+    104: 72, 105: 73, 106: 55, 107: 78, 109: 74, 110: 83, 111: 181,
+    112: 59, 113: 60, 114: 61, 115: 62, 116: 63, 117: 64, 118: 65, 119: 66,
+    120: 67, 121: 68, 122: 87, 123: 88,
+    144: 69, 145: 70, 186: 39, 187: 13, 188: 51, 189: 12, 190: 52, 191: 53,
+    192: 41, 219: 26, 220: 43, 221: 27, 222: 40
+  };
+
+  function toLwjgl(code) { return KEYMAP[code] || 0; }
+
+  function installInput() {
+    window.addEventListener('keydown', function (e) {
+      var k = toLwjgl(e.keyCode);
+      if (!k) return;
+      if (e.keyCode === 32 || (e.keyCode >= 37 && e.keyCode <= 40) || e.keyCode === 9) e.preventDefault();
+      if (!keys[k]) { keys[k] = true; keyQueue.push(k + ':1'); }
+    }, false);
+    window.addEventListener('keyup', function (e) {
+      var k = toLwjgl(e.keyCode);
+      if (!k) return;
+      keys[k] = false;
+      keyQueue.push(k + ':0');
+    }, false);
+    window.addEventListener('blur', function () { keys = {}; }, false);
+
+    function pos(e) {
+      var r = canvas.getBoundingClientRect();
+      var sx = canvas.width / Math.max(1, r.width);
+      var sy = canvas.height / Math.max(1, r.height);
+      return {
+        x: Math.round((e.clientX - r.left) * sx / dpr),
+        y: Math.round(H - (e.clientY - r.top) * sy / dpr)
+      };
+    }
+
+    canvas.addEventListener('mousemove', function (e) {
+      var p = pos(e);
+      mouse.dx += p.x - mouse.x;
+      mouse.dy += p.y - mouse.y;
+      mouse.x = p.x; mouse.y = p.y;
+    }, false);
+    canvas.addEventListener('mousedown', function (e) {
+      var p = pos(e); mouse.x = p.x; mouse.y = p.y;
+      mouse.buttons[e.button] = true;
+      mouse.queue.push(p.x + ':' + p.y + ':' + e.button + ':1:0:0');
+      e.preventDefault();
+    }, false);
+    canvas.addEventListener('mouseup', function (e) {
+      var p = pos(e); mouse.x = p.x; mouse.y = p.y;
+      mouse.buttons[e.button] = false;
+      mouse.queue.push(p.x + ':' + p.y + ':' + e.button + ':0:0:0');
+    }, false);
+    canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); }, false);
+  }
+
+  G.isKeyDown = function (k) { return !!keys[k]; };
+  G.nextKeyEvent = function () { return keyQueue.length ? keyQueue.shift() : null; };
+  G.clearKeys = function () { keys = {}; keyQueue.length = 0; };
+
+  G.isButtonDown = function (b) { return !!mouse.buttons[b]; };
+  G.getMouseX = function () { return mouse.x; };
+  G.getMouseY = function () { return mouse.y; };
+  G.getMouseDX = function () { var d = mouse.dx; mouse.dx = 0; return d; };
+  G.getMouseDY = function () { var d = mouse.dy; mouse.dy = 0; return d; };
+  G.nextMouseEvent = function () { return mouse.queue.length ? mouse.queue.shift() : null; };
+  G.setGrabbed = function (g) {
+    mouse.grabbed = g;
+    if (canvas) canvas.style.cursor = g ? 'none' : 'default';
+  };
+  G.setCursorPosition = function (x, y) { mouse.x = x; mouse.y = y; };
+
+  G.debugStats = function () {
+    return {
+      width: canvas ? canvas.width : 0,
+      height: canvas ? canvas.height : 0,
+      textures: Object.keys(textures).length,
+      programs: Object.keys(programs).length,
+      shaders: Object.keys(shaders).length,
+      buffers: Object.keys(buffers).length
+    };
+  };
+})();
+
+</script>
+<script>
+"use strict";
+(function(module){if(typeof define==='function'&&define.amd){define(['exports'],function(exports){module(exports);});}else if(typeof exports==='object'&&exports!==null&&typeof exports.nodeName!=='string'){module(exports);}else{module(typeof self!=='undefined'?self:this);}}(function(B){let EV=2463534242,FS=()=>{let x=EV;x^=x<<13;x^=x>>>17;x^=x<<5;EV=x;return x;},Ez=f=>function(){return f(this);},Ce=f=>function(p1){return f(this,p1);},EA=f=>function(p1,p2,p3,p4){return f(this,p1,p2,p3,p4);},Ff=f=>(args,callback)=>
+{if(!args){args=[];}let javaArgs=O(Bj(),args.length);for(let i=0;i<args.length;++i){javaArgs.data[i]=Bd(args[i]);}GW(()=>{f.call(null,javaArgs);},callback);},Bc=target=>target.$clinit=()=>{},GY=obj=>{let cls=obj.constructor;let arrayDegree=0;while(cls[G]&&cls[G].item){++arrayDegree;cls=cls[G].item;}let clsName="";if(cls[G].primitiveKind!==0){clsName=cls[G].name;}else {clsName=cls[G]?cls[G].name||"a/"+cls.name:"@"+cls.name;}while(arrayDegree-->0){clsName+="[]";}return clsName;},E=superclass=>{if(superclass===
+0){return function(){};}if(superclass===void 0){superclass=Bj();}return function(){superclass.call(this);};},G=Symbol("teavm_meta"),BS=cls=>{if(cls[G].classObject===null){cls[G].classObject=FY(cls);}return cls[G].classObject;},Bj=()=>D,FG=()=>{{return Da();}},Dl=t=>{{return DZ(t);}},CU=source=>{return Object.assign({name:null,binaryName:null,parent:null,superinterfaces:[],modifiers:0,primitiveKind:0,itemType:null,arrayType:null,enclosingClass:null,declaringClass:null,simpleName:null,clinit:()=>{},constructor:
+null,enumConstants:()=>null,resolvedEnumConstants:null,reflection:null,classObject:null,assignableCache:null,valueToObject:o=>o,objectToValue:o=>o},source||{});},BZ=(name,binaryName,kind,config)=>{let cls=()=>{};let meta=CU({name:name,binaryName:binaryName,modifiers:1|1<<4,primitiveKind:kind});cls[G]=meta;if(typeof config==='function'){config(meta);}return cls;},G$=BZ("boolean","Z",1,meta=>{}),Dc=BZ("char","C",4,meta=>{}),DW=BZ("int","I",5,meta=>{}),Bx=BZ("float","F",7,meta=>{}),F_=(a,b)=>a===b?0:a<b? -1:1,Ch
+=Math.imul||function(a,b){let ah=a>>>16&0xFFFF;let al=a&0xFFFF;let bh=b>>>16&0xFFFF;let bl=b&0xFFFF;return al*bl+(ah*bl+al*bh<<16>>>0)|0;},Cq=(a,b)=>(a>>>0)/(b>>>0)>>>0,G0=(a,b)=>(a>>>0)%(b>>>0)>>>0,CJ=(a,b)=>{a>>>=0;b>>>=0;return a<b? -1:a>b?1:0;},Be=BigInt(0),BO=val=>BigInt.asIntN(64,BigInt(val|0)),De=val=>BigInt.asIntN(64,BigInt(val>=0?Math.floor(val):Math.ceil(val))),DU=val=>Number(val),Dn=val=>Number(BigInt.asIntN(32,val))|0,Fg=(a,b)=>a>=b,FC=(a,b)=>a<=b,B1=(a,b)=>BigInt.asIntN(64,a -b),GF=(a,b)=>BigInt.asIntN(64,
+a/b),O=(cls,sz)=>{let data=new Array(sz);data.fill(null);return new (R(cls))(data);},G1=(cls,sz)=>new (R(cls))(new Array(sz)),Cd=sz=>new F6(new Uint16Array(sz)),Es=sz=>new Ga(new Int32Array(sz)),G4=sz=>new GK(new Int8Array(sz)),K=sz=>new Dr(new Float32Array(sz)),Bp=data=>{let buffer=new Float32Array(data.length);buffer.set(data);return new Dr(buffer);},R=cls=>{let result=cls[G].arrayType;if(result===null){function JavaArray(data){(Bj()).call(this);this.data=data;}JavaArray.prototype=Object.create((Bj()).prototype);JavaArray.prototype.type
+=cls;JavaArray.prototype.constructor=JavaArray;JavaArray.prototype.toString=function(){let str="[";for(let i=0;i<this.data.length;++i){if(i>0){str+=", ";}str+=this.data[i].toString();}str+="]";return str;};JavaArray.prototype.cy=function(){let dataCopy;if('slice' in this.data){dataCopy=this.data.slice();}else {dataCopy=new this.data.constructor(this.data.length);for(let i=0;i<dataCopy.length;++i){dataCopy[i]=this.data[i];}}return new (R(this.type))(dataCopy);};let name="["+cls[G].binaryName;JavaArray[G]=CU({
+name:name,binaryName:name,parent:Bj(),itemType:cls});result=JavaArray;cls[G].arrayType=JavaArray;}return result;},GZ=(cls,dimensions)=>{let first=0;for(let i=dimensions.length -1;i>=0;i=i -1|0){if(dimensions[i]===0){first=i;break;}}if(first>0){for(let i=0;i<first;i=i+1|0){cls=R(cls);}if(first===dimensions.length -1){return O(cls,dimensions[first]);}}let arrays=new Array(E0(dimensions,first));let firstDim=dimensions[first]|0;for(let i=0;i<arrays.length;i=i+1|0){arrays[i]=O(cls,firstDim);}return Eb(cls,arrays,
+dimensions,first,0);},BY=dimensions=>{let arrays=new Array(E0(dimensions,0));if(arrays.length===0){return GZ(Bx,dimensions);}let firstDim=dimensions[0]|0;for(let i=0;i<arrays.length;i=i+1|0){arrays[i]=K(firstDim);}return Eb(Bx,arrays,dimensions,0);},E0=(dimensions,start)=>{let val=dimensions[start+1]|0;for(let i=start+2;i<dimensions.length;i=i+1|0){val=val*(dimensions[i]|0)|0;if(val===0){break;}}return val;},Eb=(cls,arrays,dimensions,start)=>{let limit=arrays.length;for(let i=start+1|0;i<dimensions.length;i
+=i+1|0){cls=R(cls);let dim=dimensions[i];let index=0;let packedIndex=0;while(index<limit){let arr=G1(cls,dim);for(let j=0;j<dim;j=j+1|0){arr.data[j]=arrays[index];index=index+1|0;}arrays[packedIndex]=arr;packedIndex=packedIndex+1|0;}limit=packedIndex;}return arrays[0];};
+function Ei(array){return array.data.length;}
+let CA,F0=strings=>{Gl();CA=new Array(strings.length);for(let i=0;i<strings.length;++i){CA[i]=DJ(Bd(strings[i]));}},F=index=>CA[index],EN=(array,offset,count)=>{let result="";let limit=offset+count;if(count<=16){for(let i=offset;i<limit;i=i+1|0){result+=String.fromCharCode(array[i]);}}else {for(let i=offset;i<limit;i=i+1024|0){let next=Math.min(limit,i+1024|0);result+=String.fromCharCode.apply(null,array.subarray(i,next));}}return result;},Bd=str=>str===null?null:Dx(str),Bl=str=>str===null?null:str.bA,Gl=()=>
+Bm(),DJ;
+{DJ=str=>str;}let BU=(from,to)=>{if(to===Bj()){return from[G].primitiveKind===0;}if(from===to){return true;}let map=from[G].assignableCache;if(map===null){map=new Map();from[G].assignableCache=map;}let cachedResult=map.get(to);if(typeof cachedResult!=='undefined'){return cachedResult;}if(to[G].itemType!==null){let result=from[G].itemType!==null&&BU(from[G].itemType,to[G].itemType);map.set(to,result);return result;}let parent=from[G].parent;if(parent!==null&&parent!==from){if(BU(parent,to)){map.set(to,true);return true;}}let superinterfaces
+=from[G].superinterfaces;for(let i=0;i<superinterfaces.length;i=i+1|0){if(BU(superinterfaces[i],to)){map.set(to,true);return true;}}map.set(to,false);return false;},H=ex=>{throw D5(ex);},Bt=Symbol("javaException"),D5=ex=>{if(!ex.$jsException){Ew(ex);}return ex.$jsException;},Ew=ex=>{let javaCause=Hg(ex);let jsCause=javaCause!==null?javaCause.$jsException:void 0;let cause=typeof jsCause==="object"?{cause:jsCause}:void 0;let err=new Bg("Java exception thrown",cause);if(typeof Error.captureStackTrace==="function")
+{Error.captureStackTrace(err);}err[Bt]=ex;ex.$jsException=err;EE(err,ex);},EE=(err,ex)=>{if(typeof FI==="function"&&err.stack){let stack=FI(err.stack);let javaStack=O(FX(),stack.length);let elem;let noStack=false;for(let i=0;i<stack.length;++i){let element=stack[i];elem=F4(Bd(element.className),Bd(element.methodName),Bd(element.fileName),element.lineNumber);if(elem==null){noStack=true;break;}javaStack.data[i]=elem;}if(!noStack){Gd(ex,javaStack);}}},Bg;
+if(typeof Reflect==='object'){let defaultMessage=Symbol("defaultMessage");Bg=function Bg(message,cause){let self=Reflect.construct(Error,[void 0,cause],Bg);Object.setPrototypeOf(self,Bg.prototype);self[defaultMessage]=message;return self;}
+;Bg.prototype=Object.create(Error.prototype,{constructor:{configurable:true,writable:true,value:Bg},message:{get(){try {let javaException=this[Bt];if(typeof javaException==='object'){let javaMessage=E_(javaException);if(typeof javaMessage==="object"){return javaMessage!==null?javaMessage.toString():null;}}return this[defaultMessage];}catch(e){return "Exception occurred trying to extract Java exception message: "+e;}}}});}else {Bg=Error;}let Fo=e=>e instanceof Error&&typeof e[Bt]==='object'?e[Bt]:null,BH=err=>
+{let ex=err[Bt];if(!ex){ex=FE(Bd("(JavaScript) "+err.toString()));err[Bt]=ex;ex.$jsException=err;EE(err,ex);}return ex;},FE=message=>GS(message),E_=t=>G_(t),Hg=t=>Hh(t),FX=()=>Bj(),F4=(className,methodName,fileName,lineNumber)=>{{return null;}},Gd=(e,stack)=>{},Ds=null,Gq=data=>{let i=0;let packages=new Array(data.length);for(let j=0;j<data.length;++j){let prefixIndex=data[i++];let prefix=prefixIndex>=0?packages[prefixIndex]:"";packages[j]=prefix+data[i++]+".";}Ds=packages;},F3=[],Dy=data=>{let packages=Ds;let i
+=0;while(i<data.length){let cls=data[i++];F3.push(cls);let m=CU();cls[G]=m;let className=data[i++];m.name=className!==0?className:null;if(m.name!==null){let packageIndex=data[i++];if(packageIndex>=0){m.name=packages[packageIndex]+m.name;}}m.binaryName="L"+m.name+";";let superclass=data[i++];m.parent=superclass!==0?superclass:null;m.superinterfaces=data[i++];if(m.parent){cls.prototype=Object.create(m.parent.prototype);}else {cls.prototype={};}cls.prototype.constructor=cls;m.modifiers=data[i++];m.primitiveKind
+=0;if((m.modifiers&1<<9)!==0){m.parent=null;}let innerClassInfo=data[i++];if(innerClassInfo!==0){let enclosingClass=innerClassInfo[0];m.enclosingClass=enclosingClass!==0?enclosingClass:null;let declaringClass=innerClassInfo[1];m.declaringClass=declaringClass!==0?declaringClass:null;let simpleName=innerClassInfo[2];m.simpleName=simpleName!==0?simpleName:null;}let clinit=data[i++];m.clinit=clinit!==0?()=>{m.clinit=()=>{};clinit();}:()=>{};let virtualMethods=data[i++];if(virtualMethods!==0){for(let j=0;j<virtualMethods.length;j
++=2){let name=virtualMethods[j];let func=virtualMethods[j+1];if(typeof name==='string'){name=[name];}for(let k=0;k<name.length;++k){cls.prototype[name[k]]=func;}}}}};
+function P(runner){this.status=3;this.stack=[];this.suspendCallback=null;this.runner=runner;this.attribute=null;this.completeCallback=null;}
+P.prototype.push=function(){for(let i=0;i<arguments.length;++i){this.stack.push(arguments[i]);}return this;};P.prototype.s=P.prototype.push;P.prototype.pop=function(){return this.stack.pop();};P.prototype.l=P.prototype.pop;P.prototype.isResuming=function(){return this.status===2;};P.prototype.isSuspending=function(){return this.status===1;};P.prototype.suspend=function(callback){this.suspendCallback=callback;this.status=1;};P.prototype.start=function(callback){if(this.status!==3){throw new Error("Thread already started");}if
+(BP!==null){throw new Error("Another thread is running");}this.status=0;this.completeCallback=callback?callback:result=>{if(result instanceof Error){throw result;}};this.run();};P.prototype.resume=function(){if(BP!==null){throw new Error("Another thread is running");}this.status=2;this.run();};P.prototype.run=function(){BP=this;let result;try {result=this.runner();}catch(e){result=e;}finally {BP=null;}if(this.suspendCallback!==null){let self=this;let callback=this.suspendCallback;this.suspendCallback=null;callback(()=>
+self.resume());}else if(this.status===0){this.completeCallback(result);}};let B$=()=>{let thread=X();return thread!=null&&thread.isSuspending();},C4=()=>{let thread=X();return thread!=null&&thread.isResuming();},Fe=()=>{let nativeThread=X();if(nativeThread===null){throw new Error("Suspension point reached from non-threading context "+"(perhaps, from native JS method). See https://teavm.org/docs/runtime/coroutines.html "+"('Interaction with JavaScript' section)");}return nativeThread;},GW=(runner,callback)=>
+(new P(runner)).start(callback),BP=null,X=()=>BP,Cz=()=>{throw new Error("Invalid recorded state");};
+function D(){this.$id$=0;}
+let BV=a=>{return BS(GG(a));},GG=b=>{return b.constructor;},F$=a=>{let b,c,d,e,f,g,h,i,j,k;b=a;if(!b.$id$)b.$id$=FS();c=a.$id$;Bn();if(!c)d=F(0);else{if(!c)e=32;else{f=0;e=c>>>16|0;if(e)f=16;else e=c;g=e>>>8|0;if(!g)g=e;else f=f|8;h=g>>>4|0;if(!h)h=g;else f=f|4;e=h>>>2|0;if(!e)e=h;else f=f|2;if(e>>>1|0)f=f|1;e=(32-f|0)-1|0;}i=(((32-e|0)+4|0)-1|0)/4|0;j=Cd(i);k=j.data;i=(i-1|0)*4|0;e=0;while(i>=0){h=e+1|0;k[e]=CV((c>>>i|0)&15,16);i=i-4|0;e=h;}d=FA(j);}b=Bb();J(J(b,F(1)),d);return Y(b);},Bu=E(0),Br=E(0),Cu=E(0),V
+=E(),Fl=null,DO=null,FU=null,Bm=()=>{Bm=Bc(V);GV();},Gv=(a,b)=>{Bm();a.bA=EN(b.data,0,b.data.length);},FA=a=>{let b=new V();Gv(b,a);return b;},GP=(a,b)=>{a.bA=b;},Dx=a=>{let b=new V();GP(b,a);return b;},C7=(a,b)=>{let c;if(b>=0&&b<a.bA.length)return a.bA.charCodeAt(b);c=new B7;M(c);H(c);},D8=a=>{return a.bA.length?0:1;},BC=(a,b,c)=>{let d,e,f;d=a.bA.length;e=F_(b,c);if(e){if(!b&&c==d)return a;if(b>=0&&e<=0&&c<=d)return Dx(a.bA.substring(b,c));f=new B7;M(f);H(f);}return DO;},FW=(a,b)=>{return BC(a,b,a.bA.length);},C2
+=b=>{Bm();return b===null?F(2):b;},Hl=(a,b)=>{let c;if(a!==b){if(b instanceof V){c=b;return a.bA!==c.bA?0:1;}return 0;}return 1;},GV=()=>{let b;Fl=Cd(0);b=new V;Bm();b.bA="";DO=b;FU=new E7;},CQ=E();
+function BA(){CQ.call(this);this.bO=0;}
+let F2=null,Cl=null,Bn=()=>{Bn=Bc(BA);FR();},Fa=(a,b)=>{Bn();a.bO=b;},Eo=a=>{let b=new BA();Fa(b,a);return b;},Fh=(b,c,d,e)=>{let f,g,h,i,j,k,l,m;Bn();if(c!=d){if(e>=2&&e<=36){a:{b:{c:{f=0;b=b;switch(C7(b,c)){case 43:break c;case 45:break b;default:}g=c;break a;}g=c+1|0;break a;}f=1;g=c+1|0;}h=0;i=1+(2147483647/e|0)|0;if(g!=d){while(g<d){j=g+1|0;k=C7(b,g);k=k>=48&&k<=57?k-48|0:k>=97&&k<=122?(k-97|0)+10|0:!(k>=65&&k<=90)?(-1):(k-65|0)+10|0;if(k<0){l=new U;b=C2(BC(b,c,d));m=Bb();J(J(m,F(3)),b);L(l,Y(m));H(l);}if
+(k>=e){l=new U;b=C2(BC(b,c,d));m=Bb();J(J(Bv(J(m,F(4)),e),F(5)),b);L(l,Y(m));H(l);}if(h>i){b=new U;L(b,F(6));H(b);}h=Ch(e,h)+k|0;if(h<0){if(j==d&&h==(-2147483648)&&f)return (-2147483648);l=new U;b=C2(BC(b,c,d));m=Bb();J(J(m,F(7)),b);L(l,Y(m));H(l);}g=j;}if(f)h= -h|0;return h;}b=new U;M(b);H(b);}b=new U;l=Bb();Bv(J(l,F(8)),e);L(b,Y(l));H(b);}b=new U;L(b,F(9));H(b);},G8=b=>{Bn();if(b===null){b=new U;L(b,F(10));H(b);}return Fh(b,0,b.bA.length,10);},FR=()=>{F2=BS(DW);};
+function CZ(){let a=this;D.call(a);a.bB=null;a.bD=0;}
+let Cf=(a,b,c)=>{let d,e,f,g;d=a.bD;e=d-b|0;d=(d+c|0)-b|0;EK(a,d);f=e-1|0;while(f>=0){g=a.bB.data;g[c+f|0]=g[b+f|0];f=f+(-1)|0;}a.bD=a.bD+(c-b|0)|0;},E$=E(0),DD=E(CZ),F9=a=>{a.bB=Cd(16);},Bb=()=>{let a=new DD();F9(a);return a;},J=(a,b)=>{let c,d,e,f,g,h;c=a.bD;d=a;b=b===null?F(2):b;e=d;if(c>=0&&c<=e.bD){a:{if(b===null)b=F(2);else if(D8(b))break a;f=e.bD+b.bA.length|0;EK(e,f);f=e.bD-1|0;while(f>=c){e.bB.data[f+b.bA.length|0]=e.bB.data[f];f=f+(-1)|0;}e.bD=e.bD+b.bA.length|0;f=0;while(f<b.bA.length){g=e.bB.data;h
+=c+1|0;g[c]=C7(b,f);f=f+1|0;c=h;}}return a;}b=new B7;D3(b);H(b);},Bv=(a,b)=>{let c,d,e,f,g,h,i,j;c=a.bD;d=1;if(b<0){d=0;b= -b|0;}a:{if(CJ(b,10)<0){if(d)Cf(a,c,c+1|0);else{Cf(a,c,c+2|0);e=a.bB.data;f=c+1|0;e[c]=45;c=f;}a.bB.data[c]=CV(b,10);}else{g=1;h=1;f=Cq((-1),10);b:{c:{while(true){i=g*10|0;if(CJ(i,b)>0)break c;h=h+1|0;if(CJ(i,f)>0)break;g=i;}break b;}i=g;}if(!d)h=h+1|0;Cf(a,c,c+h|0);if(d)f=c;else{e=a.bB.data;f=c+1|0;e[c]=45;}while(true){if(!i)break a;e=a.bB.data;j=f+1|0;e[f]=CV(Cq(b,i),10);b=G0(b,i);i=Cq(i,
+10);f=j;}}}return a;},Y=a=>{let b,c,d,e,f;b=new V;c=a.bB;d=c.data;e=a.bD;Bm();f=d.length;if(e>=0&&e<=(f-0|0)){b.bA=EN(c.data,0,e);return b;}b=new Z;M(b);H(b);},EK=(a,b)=>{let c,d,e,f,g;c=a.bB.data.length;if(c<b){b=c>=1073741823?2147483647:B2(b,B2(c*2|0,5));d=a.bB.data;e=Cd(b);f=d.length;if(b<f)f=b;g=e.data;c=0;while(c<f){g[c]=d[c];c=c+1|0;}a.bB=e;}};
+function Ba(){let a=this;D.call(a);a.bZ=null;a.cm=null;a.bW=0;a.b0=0;a.bV=null;}
+let Ho=a=>{return a;},EC=a=>{Ew(a);},G_=a=>{return a.bZ;},Hh=a=>{let b;b=a.cm;if(b===a)b=null;return b;},Bs=E(Ba),L=(a,b)=>{a.bV=O(Ba,0);EC(a);a.bW=1;a.b0=1;a.bZ=b;},Hq=a=>{let b=new Bs();L(b,a);return b;},I=E(Bs),M=a=>{a.bV=O(Ba,0);EC(a);a.bW=1;a.b0=1;},Hn=()=>{let a=new I();M(a);return a;},Fu=(a,b)=>{L(a,b);},GS=a=>{let b=new I();Fu(b,a);return b;},By=E(),GD=E(By),Go=E(By),D9=E(0),EQ=E(0),Do=E(0);
+function Er(){D.call(this);this.bE=null;}
+let FY=b=>{let c;c=new Er;c.bE=b;return c;},Ci=a=>{return !a.bE[G].primitiveKind?0:1;},Dz=a=>{let b;b=a.bE[G].itemType;return b===null?null:BS(b);},EM=E(),S=0,B4=0,DX=0,Eg=0,Bf=0.0,T=0.0,Bh=0,Bo=()=>{Bo=Bc(EM);Fv();},G6=b=>{let c,d,e,f,g,h,i,j,k,$p,$z;$p=0;if(C4()){let $T=X();$p=$T.l();k=$T.l();j=$T.l();i=$T.l();h=$T.l();g=$T.l();f=$T.l();e=$T.l();d=$T.l();c=$T.l();b=$T.l();}_:while(true){switch($p){case 0:Bo();c=C$(760,560);Bq();BM=c;BR=F(11);if(Bw)window.JARJS_GL.setSize(c.bG,c.bI,"JARJS · 现代 GL20 自定义着色器演示");if
+(!Bw){c=BM;d=c.bG;e=c.bI;Q();if(Bi)f=1;else{CW=d;Cw=e;f=!(window.JARJS_GL?window.JARJS_GL.init(d,e,1.0):0)?0:1;Bi=f;if(!f)FQ("WebGL 初始化失败，检查 canvas#game 是否已存在或上下文被 2D 占用");f=Bi;}if(f){Bw=1;BE=0;g=BG();EW=g;Cg=g;c=BM;window.JARJS_GL.setSize(c.bG,c.bI,Bl(BR));window.JARJS_GL.setVSync(!!EX);window.document.title=Bl(BR);c=BM;EL(0,0,c.bG,c.bI);}else{c=new Et;L(c,F(12));H(c);}}f=DK(35633,F(13));e=DK(35632,F(14));d=window.JARJS_GL.createProgram();S=d;D2(d,f);D2(S,e);EI(S,0,F(15));EI(S,1,F(16));window.JARJS_GL.linkProgram(S);if
+(window.JARJS_GL.getProgrami(S,35714)){DX=Ev(S,F(17));Eg=Ev(S,F(18));Ha();g=BG();if(!E8()){h=BG();i=DU(B1(h,g))/1.0E9;if(W(1))B0();else{while(DA()){if(!Ca)continue;e=BI;if(e==57)Bh=Bh?0:1;else if(e==19)Bf=0.0;}if(!(!W(205)&&!W(32)))T=EU(T+1.2000000476837158*i,4.0);else if(!(!W(203)&&!W(30)))T=DE(T-1.2000000476837158*i,0.10000000149011612);}if(!Bh)Bf=Bf+i*T;E9(760,560);f=1;$p=1;continue _;}window.JARJS_GL.deleteBuffer(B4);window.JARJS_GL.deleteProgram(S);B0();return;}j=Bd(window.JARJS_GL.getProgramInfoLog(S));c
+=new I;k=Bb();J(J(k,F(19)),j);L(c,Y(k));H(c);case 1:GN(f);if(B$()){break _;}g=h;if(!E8()){h=BG();i=DU(B1(h,g))/1.0E9;if(W(1))B0();else{while(DA()){if(!Ca)continue;e=BI;if(e==57)Bh=Bh?0:1;else if(e==19)Bf=0.0;}if(!(!W(205)&&!W(32)))T=EU(T+1.2000000476837158*i,4.0);else if(!(!W(203)&&!W(30)))T=DE(T-1.2000000476837158*i,0.10000000149011612);}if(!Bh)Bf=Bf+i*T;E9(760,560);f=1;continue _;}window.JARJS_GL.deleteBuffer(B4);window.JARJS_GL.deleteProgram(S);B0();return;default:Cz();}}X().s(b,c,d,e,f,g,h,i,j,k,$p);},DK
+=(b,c)=>{let d,e,f;Bo();d=window.JARJS_GL.createShader(b);window.JARJS_GL.shaderSource(d,Bl(c===null?F(20):c));window.JARJS_GL.compileShader(d);if(!window.JARJS_GL.getShaderi(d,35713)){e=Bd(window.JARJS_GL.getShaderInfoLog(d));c=new I;f=Bb();J(J(Bv(J(f,F(21)),b),F(22)),e);L(c,Y(f));H(c);}return d;},Ha=()=>{let b,c,d,e,f,g,h,i,j,k,l,m;Bo();b=K(24);c=b.data;c[0]=(-1.0);c[1]=(-1.0);c[2]=0.0;c[3]=0.0;c[4]=1.0;c[5]=(-1.0);c[6]=1.0;c[7]=0.0;c[8]=1.0;c[9]=1.0;c[10]=1.0;c[11]=1.0;c[12]=(-1.0);c[13]=(-1.0);c[14]=0.0;c[15]
+=0.0;c[16]=1.0;c[17]=1.0;c[18]=1.0;c[19]=1.0;c[20]=(-1.0);c[21]=1.0;c[22]=0.0;c[23]=1.0;d=c.length;e=d*4|0;if(e>=0){f=new Eu;g=null;h=new Int8Array(e);D4(f);BD();f.bJ=Cx;f.cf=g;f.cd=0;f.bH=h;f.cs=1;f.bM=0;f.bF=e;f.bJ=ET();f=f;i=CR(f)/4|0;if(f.bJ===ET()){h=new Float32Array(f.bH.buffer,f.bH.byteOffset+f.bC|0,i);g=new Ee;j=f.bM;f=null;DI(g,0,i);g.bY=j;g.bL=h;g.ca=f;}else{k=new DataView(f.bH.buffer,f.bH.byteOffset+f.bC|0,i*4|0);g=new DH;j=f.bM;l=f.bJ!==CT?0:1;DI(g,0,i);g.bS=j;g.bK=k;g.bP=l;}Gw(g,b,0,d);g.bF=g.bC;g.bC
+=0;g.b3=(-1);e=window.JARJS_GL.createBuffer();B4=e;BT(34962,e);i=CR(g);b=K(i);c=b.data;m=g.bC;j=0;while(j<i){l=m+j|0;c[j]=Gh(g,l);j=j+1|0;}window.JARJS_GL.bufferDataFloat(34962,CY(b),35044);BT(34962,0);return;}g=new BF;f=Bb();Bv(J(f,F(23)),e);L(g,Y(f));H(g);},E9=(b,c)=>{let d,e;Bo();Q();if(Bi)window.JARJS_GL.clear(Eh,Ek,Em,El,16640);EL(0,0,b,c);EP(S);window.JARJS_GL.uniform1f(DX,Bf);window.JARJS_GL.uniform2f(Eg,b,c);BT(34962,B4);Ej(0);Dk(0,2,5126,0,16,Be);Ej(1);Dk(1,2,5126,0,16,BO(8));if(!(!Ct&&ER))window.JARJS_GL.drawArraysNative(4,
+0,6);else{d=K(54);e=0;while(e<6){Ft(d,e*9|0,0+e|0);e=e+1|0;}GI(4,d,6);}EO(0);EO(1);BT(34962,0);EP(0);},Fv=()=>{Bf=0.0;T=1.0;Bh=0;},F7=E(),Hb=b=>{let c,d;b=b;if(!b.cr){c=b.b4;c.bT=null;DZ(c);b=b.bX;d=null;Eq(b,d);}},FL=(b,c)=>{setTimeout(()=>{Hb(b);},c);},GL=E(),CY=b=>{let c,d,e;if(b!==null){b=b.data;c=b.length;d=new Float32Array(c);e=0;while(e<c){d[e]=b[e];e=e+1|0;}return d;}return null;},G9=E();
+function Dm(){let a=this;D.call(a);a.bG=0;a.bI=0;a.cc=0;a.cn=0;}
+let Gp=(a,b,c)=>{a.bG=b;a.bI=c;a.cc=60;a.cn=32;},C$=(a,b)=>{let c=new Dm();Gp(c,a,b);return c;},Dq=E(),BM=null,Bw=0,BE=0,FM=0,EX=0,BR=null,Cg=Be,EW=Be,Bq=()=>{Bq=Bc(Dq);G7();},E8=()=>{Bq();if((window.JARJS_GL?window.JARJS_GL.closeRequested():false)?1:0)BE=1;return BE;},GN=b=>{let c,d,e,$$je,$p,$z;$p=0;if(C4()){let $T=X();$p=$T.l();e=$T.l();d=$T.l();c=$T.l();b=$T.l();}_:while(true){switch($p){case 0:Bq();if(Bw){c=BG();d=GF(B1(c,Cg),BO(1000000));Cg=c;e=B1(BO(16),d);if(FC(e,Be))try{d=Be;$p=1;continue _;}catch($$e)
+{$$je=BH($$e);if($$je instanceof Ba){}else{throw $$e;}}else try{$p=2;continue _;}catch($$e){$$je=BH($$e);if($$je instanceof Ba){}else{throw $$e;}}return;}return;case 1:a:{b:{try{Df(d);if(B$()){break _;}break a;}catch($$e){$$je=BH($$e);if($$je instanceof Ba){break b;}else{throw $$e;}}}}return;case 2:a:{b:{try{Df(e);if(B$()){break _;}break a;}catch($$e){$$je=BH($$e);if($$je instanceof Ba){break b;}else{throw $$e;}}}}return;default:Cz();}}X().s(b,c,d,e,$p);},B0=()=>{Bq();Bw=0;BE=1;},G7=()=>{BM=C$(480,480);Bw=0;BE
+=0;FM=0;EX=1;BR=F(24);Cg=Be;EW=Be;},FK=E(),Hm=(b,c,d,e,f)=>{let g,h,i,j,k,l,m,n;if(b!==null&&d!==null){if(c>=0&&e>=0&&f>=0&&(c+f|0)<=DV(b)&&(e+f|0)<=DV(d)){a:{b:{if(b!==d){g=Dz(BV(b));h=Dz(BV(d));if(g!==null&&h!==null){if(g===h)break b;if(!Ci(g)&&!Ci(h)){i=b;j=0;k=c;while(j<f){c:{d:{l=i.data;m=k+1|0;n=l[k];if(n!==null){n=BV(n);if(BU(n.bE,h.bE))break d;}k=0;break c;}k=1;}if(!k){B_(b,c,d,e,j);b=new Ck;M(b);H(b);}j=j+1|0;k=m;}B_(b,c,d,e,f);return;}if(!Ci(g))break a;if(Ci(h))break b;else break a;}b=new Ck;M(b);H(b);}}B_(b,
+c,d,e,f);return;}b=new Ck;M(b);H(b);}b=new Z;M(b);H(b);}d=new DB;L(d,F(25));H(d);},N=(b,c,d,e,f)=>{if(c>=0&&e>=0&&f>=0&&(c+f|0)<=DP(b)&&(e+f|0)<=DP(d)){B_(b,c,d,e,f);return;}b=new Z;M(b);H(b);},DP=b=>{return Ei(b);},B_=(b,c,d,e,f)=>{if(f!==0){if(typeof b.data.buffer!=='undefined'){d.data.set(b.data.subarray(c,c+f),e);}else if(b!==d||e<c){for(let i=0;i<f;i=i+1|0){d.data[e++]=b.data[c++];}}else {c=c+f|0;e=e+f|0;for(let i=0;i<f;i=i+1|0){d.data[ --e]=b.data[ --c];}}}},Fy=()=>{return De((new Date()).getTime());},BG
+=()=>{return De(performance.now()*1000000.0);},DQ=E(0),E7=E(),CG=E(),F1=null,Gb=null,CB=()=>{CB=Bc(CG);GH();},CV=(b,c)=>{CB();if(c>=2&&c<=36&&b>=0&&b<c)return b<10?(48+b|0)&65535:((97+b|0)-10|0)&65535;return 0;},GH=()=>{F1=BS(Dc);Gb=O(CG,128);};
+function Gm(){let a=this;D.call(a);a.ct=0;a.cx=0;a.cu=0;a.cv=0;a.cz=0;a.cw=0;}
+let Gg=E(),D2=(b,c)=>{window.JARJS_GL.attachShader(b,c);},EP=b=>{Q();Ct=b;window.JARJS_GL.useProgram(b);},Ev=(b,c)=>{return window.JARJS_GL.getUniformLocation(b,Bl(c===null?F(20):c));},EI=(b,c,d)=>{d=d===null?F(20):d;window.JARJS_GL.bindAttribLocation(b,c,Bl(d));},Ej=b=>{window.JARJS_GL.enableVertexAttribArray(b);},EO=b=>{window.JARJS_GL.disableVertexAttribArray(b);},Dk=(b,c,d,e,f,g)=>{let h;h=Dn(g);window.JARJS_GL.vertexAttribPointer(b,c,d,!!e,f,h);},Fs=E();
+function BK(){let a=this;D.call(a);a.bC=0;a.bF=0;a.b3=0;}
+let D4=a=>{a.b3=(-1);},CR=a=>{return a.bF-a.bC|0;},CC=E(BK),Gw=(a,b,c,d)=>{let e;if(!a.be()){if(CR(a)>=d){if(d>=0&&c>=0&&(c+d|0)<=b.data.length){a.bf(a.bC,b,c,d);a.bC=a.bC+d|0;return a;}e=new Z;M(e);H(e);}e=new E3;M(e);H(e);}e=new ED;M(e);H(e);},Ge=E(),BT=(b,c)=>{window.JARJS_GL.bindBuffer(b,c);},DT=E(),BI=0,Ca=0,Fp=0,He=0,BW=()=>{BW=Bc(DT);Gk();},DA=()=>{let b,c,$$je;BW();b=Bd(window.JARJS_GL?window.JARJS_GL.nextKeyEvent():null);if(b!==null&&!D8(b)){c=B2(0,0);a:{b:{while(true){if(c>=b.bA.length)break b;if(b.bA.charCodeAt(c)
+==58)break;c=c+1|0;}break a;}c=(-1);}if(c>=0){try{BI=G8(BC(b,0,c));Ca=Hl(F(26),FW(b,c+1|0));}catch($$e){$$je=BH($$e);if($$je instanceof U){return 0;}else{throw $$e;}}return 1;}return 0;}BI=0;return 0;},W=b=>{BW();return (window.JARJS_GL?!!window.JARJS_GL.isKeyDown(b):false)?1:0;},Gk=()=>{BI=0;Ca=0;Fp=0;He=0;},FH=E(),BJ=b=>{return Math.sqrt(b);},Hf=(b,c)=>{return FP(b,c);},FP=(b,c)=>{return Math.pow(b,c);},B2=(b,c)=>{if(b>c)c=b;return c;},EU=(b,c)=>{return Math.min(b,c);},DE=(b,c)=>{return Math.max(b,c);},Gc
+=E(),Gt=E(),GT=E(),Du=E(),ES=0,EJ=0,Dw=0,Ep=0,Cm=0,GX=0,C0=0,FN=0,GJ=0,E1=0,E6=0,FV=0,FZ=0,Fb=0,FB=0,DS=0.0,Dh=0.0,Fz=0,GE=0.0,Eh=0.0,Ek=0.0,Em=0.0,El=0.0,CF=0.0;
+let CH=0.0,CI=0.0,DY=0.0,Ec=0.0,Ea=0.0,D_=0.0,E5=0.0,E4=0.0,B9=null,Cc=null,B6=null,BQ=null,DG=null,D0=null,Ey=null,Cy=null,EZ=null,EF=null,Ex=null,CM=0.0,BL=null,B5=null,DF=null,FF=0,Fq=null,FJ=null,Gr=null,GO=0,Gs=0,Gu=0,Gx=0,Hi=null,F8=0,G5=0,C9=null,C5=0,Bi=0,CW=0,Cw=0,BB=null,Ct=0,Cv=null,B8=null,C_=null,BX=0,DC=0,C8=0,Ed=0,CL=0,EH=0;
+let ER=0,Fx=0,Hd=0,Hc=0,GB=0,Fk=null,C1=null,Hk=null,Q=()=>{Q=Bc(Du);Fr();},EL=(b,c,d,e)=>{Q();CW=d;Cw=e;},Cb=(b,c,d)=>{let e,f,g,h,i,j,k,l,m,n,o,p,q,r;Q();if(d){if(C1===null){if(Bi){e=!C0?0:C5;if(!e)f=null;else{g=C9;Bn();if(!(e>=(-128)&&e<=127))h=Eo(e);else{a:{if(Cl===null){Cl=O(BA,256);i=0;while(true){j=Cl.data;if(i>=j.length)break a;j[i]=Eo(i-128|0);i=i+1|0;}}}h=Cl.data[e+128|0];}if(h===null){g=g.bN.data[0];while(g!==null&&g.b2!==null){g=g.b1;}}else{k=h;l=k.bO;j=g.bN.data;g=j[l&(j.length-1|0)];while(g!==
+null){if(g.ch==l){m=g.b2;if(!(h!==m&&!(k===m?1:!(m instanceof BA&&m.bO==l)?0:1))?1:0)break;}g=g.b1;}}f=g===null?null:g.ck;}if(f!==null&&f.bR&&Bi){f.bR=0;n=f.bU;i=f.b8;j=f.cl;l=f.b9;o=f.ce;g=e;h=n;k=i;if(j===null)p=null;else{j=j.data;n=j.length;p=new Int32Array(n);i=0;while(i<n){p[i]=j[i];i=i+1|0;}}window.JARJS_GL.texImage(g,h,k,p,l,o);}q=K(16);Dg(q,B5,BL);n=0;if(ES)n=1;if(EJ)n=n|2;if(Dw)n=n|4;if(e&&f!==null&&f.bU>0)n=n|8;if(!b)n=n|16;window.JARJS_GL.setState(n);window.JARJS_GL.blendFunc(E1,E6);window.JARJS_GL.lineWidth(DS);window.JARJS_GL.pointSize(Dh);window.JARJS_GL.draw(b,
+CY(c),d,CY(q),e,n);return;}return;}r=K(16);Dg(r,B5,BL);o=!C0?0:C5;i=d*9|0;n=4+i|0;j=K(n+16|0);q=j.data;q[0]=b;q[1]=d;q[2]=o;q[3]=0.0;N(c,0,j,4,i);N(r,0,j,n,16);C1.bn(j);return;}},Gz=(b,c,d)=>{let e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,ba,bb,bc,bd,be,bf,bg,bh,bi,bj,bk;Q();e=BL.data;f=e[0]*b+e[4]*c+e[8]*d+e[12];g=e[1]*b+e[5]*c+e[9]*d+e[13];h=e[2]*b+e[6]*c+e[10]*d+e[14];b=e[0];c=Ec;b=b*c;d=e[4];i=Ea;b=b+d*i;d=e[8];j=D_;k=b+d*j;l=e[1]*c+e[5]*i+e[9]*j;m=e[2]*c+e[6]*i+e[10]*j;n=BJ(k*k+l*l+m*m);if(n<9.999999974752427E-7)
+{k=0.0;l=0.0;m=1.0;n=1.0;}i=k/n;j=l/n;k=m/n;e=Ey.data;b=e[0];o=Cy.data;b=b*o[0];p=Ex.data;q=b+p[0];r=e[1]*o[1]+p[1];s=e[2]*o[2]+p[2];t= -f;u= -g;v= -h;w=BJ(t*t+u*u+v*v);if(w<9.999999974752427E-7){t=0.0;u=0.0;v=1.0;w=1.0;}n=t/w;t=u/w;u=v/w;x=0;while(x<8){if(DG.data[x]){e=BQ.data;if(e[x].data[3]!==0.0){y=e[x].data[0]-f;z=e[x].data[1]-g;ba=e[x].data[2]-h;}else{y= -e[x].data[0];z= -e[x].data[1];ba= -e[x].data[2];}bb=BJ(y*y+z*z+ba*ba);if(!(bb<9.999999974752427E-7)){l=y/bb;m=z/bb;bb=ba/bb;bc=i*l+j*m+k*bb;if(bc<0.0)bc
+=0.0;bd=1.0;o=BQ.data;if(o[x].data[3]!==0.0){be=(o[x].data[0]-f)*(o[x].data[0]-f)+(o[x].data[1]-g)*(o[x].data[1]-g)+(o[x].data[2]-h)*(o[x].data[2]-h);bf=BJ(be);e=D0.data;bd=1.0/(e[0]+e[1]*bf+e[2]*be);}e=B9.data;b=bd*e[x].data[0];o=Cy.data;b=q+b*o[0];c=r+bd*e[x].data[1]*o[1];d=s+bd*e[x].data[2]*o[2];bc=bd*bc;e=Cc.data;q=bc*e[x].data[0];o=EZ.data;q=b+q*o[0];r=c+bc*e[x].data[1]*o[1];s=d+bc*e[x].data[2]*o[2];if(CM>0.0){bg=l+n;bh=m+t;bi=bb+u;bj=BJ(bg*bg+bh*bh+bi*bi);if(bj>9.999999974752427E-7){bk=i*bg/bj+j*bh/bj
++k*bi/bj;if(bk>0.0){d=bd*Hf(bk,CM);o=B6.data;c=d*o[x].data[0];p=EF.data;q=q+c*p[0];r=r+d*o[x].data[1]*p[1];s=s+d*o[x].data[2]*p[2];}}}}}x=x+1|0;}e=BB;e.data[0]=CK(q*(!Cm?1.0:CF));e=BB;e.data[1]=CK(r*(!Cm?1.0:CH));e=BB;b=!Cm?1.0:CI;e.data[2]=CK(s*b);return BB;},CK=b=>{Q();if(b<0.0)b=0.0;else if(b>1.0)b=1.0;return b;},CX=b=>{let c;Q();c=0;while(c<16){b.data[c]=0.0;c=c+1|0;}b=b.data;b[15]=1.0;b[10]=1.0;b[5]=1.0;b[0]=1.0;},Dg=(b,c,d)=>{let e,f,g,h,i,j,k,l;Q();e=K(16);f=e.data;g=0;while(g<4){h=0;while(h<4){i=0.0;j
+=0;while(j<4){k=c.data;l=d.data;i=i+k[(j*4|0)+h|0]*l[(g*4|0)+j|0];j=j+1|0;}f[(g*4|0)+h|0]=i;h=h+1|0;}g=g+1|0;}N(e,0,b,0,16);},Ft=(b,c,d)=>{let e,f,g,h,i,j,k,l,m,n,o,p,q;Q();e=0.0;f=0.0;g=0.0;if(ER){h=Cv;if(h!==null){i=DC;i=i<=0?BX:i/4|0;j=h.bC+Ch(d,i)|0;e=h.N(j);if(BX>1)f=Cv.N(j+1|0);if(BX>2)g=Cv.N(j+2|0);}}k=CF;l=CH;m=CI;n=DY;if(Fx){h=B8;if(h!==null){i=Ed;i=i<=0?C8:i/4|0;j=h.bC+Ch(d,i)|0;k=h.N(j);l=B8.N(j+1|0);m=B8.N(j+2|0);if(C8>3)n=B8.N(j+3|0);}}if(Ep){o=(Gz(e,f,g)).data;k=o[0];l=o[1];m=o[2];}p=E5;q=E4;if
+(Hd){h=C_;if(h!==null){i=EH;i=i<=0?CL:i/4|0;j=h.bC+Ch(d,i)|0;p=h.N(j);if(CL>1)q=C_.N(j+1|0);}}b=b.data;b[c]=e;b[c+1|0]=f;b[c+2|0]=g;b[c+3|0]=k;b[c+4|0]=l;b[c+5|0]=m;b[c+6|0]=n;b[c+7|0]=p;b[c+8|0]=q;},GI=(b,c,d)=>{let e,f,g,h,i,j,k,l,m,n,o;Q();if(b==7){e=d/4|0;b=e*6|0;f=K(b*9|0);g=0;h=0;while(h<e){i=h*4|0;d=i*9|0;N(c,d,f,g,9);j=g+9|0;N(c,(i+1|0)*9|0,f,j,9);j=j+9|0;g=(i+2|0)*9|0;N(c,g,f,j,9);j=j+9|0;N(c,d,f,j,9);d=j+9|0;N(c,g,f,d,9);d=d+9|0;N(c,(i+3|0)*9|0,f,d,9);g=d+9|0;h=h+1|0;}Cb(4,f,b);}else if(b!=8){if(b
+!=9)Cb(b,c,d);else{j=B2(0,d-2|0)*3|0;f=K(j*9|0);g=0;k=1;while(true){l=k+1|0;if(l>=d)break;N(c,0,f,g,9);b=g+9|0;N(c,k*9|0,f,b,9);b=b+9|0;N(c,l*9|0,f,b,9);g=b+9|0;k=l;}Cb(4,f,j);}}else{e=(d-2|0)/2|0;b=e*6|0;m=K(b*9|0);n=0;h=0;while(h<e){i=h*2|0;o=Es(3).data;o[0]=i;d=i+1|0;o[1]=d;g=i+2|0;o[2]=g;f=Es(3).data;f[0]=d;f[1]=i+3|0;f[2]=g;k=0;while(k<3){N(c,o[k]*9|0,m,n,9);n=n+9|0;k=k+1|0;}k=0;while(k<3){N(c,f[k]*9|0,m,n,9);n=n+9|0;k=k+1|0;}h=h+1|0;}Cb(4,m,b);}},Fr=()=>{let b,c,d,e;ES=0;EJ=0;Dw=0;Ep=0;Cm=0;GX=0;C0=0;FN
+=1;GJ=6914;E1=1;E6=0;FV=513;FZ=1;Fb=1029;FB=2305;DS=1.0;Dh=1.0;Fz=519;GE=0.0;Eh=0.0;Ek=0.0;Em=0.0;El=1.0;CF=1.0;CH=1.0;CI=1.0;DY=1.0;Ec=0.0;Ea=0.0;D_=1.0;E5=0.0;E4=0.0;B9=BY([4,8]);Cc=BY([4,8]);B6=BY([4,8]);BQ=BY([4,8]);DG=G4(8);D0=Bp([1.0,0.0,0.0]);Ey=Bp([0.20000000298023224,0.20000000298023224,0.20000000298023224,1.0]);Cy=Bp([0.20000000298023224,0.20000000298023224,0.20000000298023224,1.0]);EZ=Bp([0.800000011920929,0.800000011920929,0.800000011920929,1.0]);EF=Bp([0.0,0.0,0.0,1.0]);Ex=Bp([0.0,0.0,0.0,1.0]);CM
+=0.0;BL=K(16);B5=K(16);DF=K(16);FF=5888;Fq=O(R(Bx),64);FJ=O(R(Bx),32);Gr=O(R(Bx),32);GO=0;Gs=0;Gu=0;Gx=(-1);Hi=K(36864);F8=0;G5=1;C9=EY();C5=0;Bi=0;CW=480;Cw=480;CX(BL);CX(B5);CX(DF);b=0;while(b<8){B9.data[b].data[3]=1.0;Cc.data[b].data[3]=1.0;B6.data[b].data[3]=1.0;BQ.data[b].data[3]=0.0;b=b+1|0;}c=B9.data;d=c[0].data;e=c[0].data;c[0].data[2]=0.0;e[1]=0.0;d[0]=0.0;c=Cc.data;d=c[0].data;e=c[0].data;c[0].data[2]=1.0;e[1]=1.0;d[0]=1.0;c=B6.data;d=c[0].data;e=c[0].data;c[0].data[2]=1.0;e[1]=1.0;d[0]=1.0;c=BQ.data;c[0].data[2]
+=1.0;c[0].data[3]=0.0;BB=K(3);Ct=0;BX=3;DC=0;C8=4;Ed=0;CL=2;EH=0;Hc=(-1);GB=0;Fk=EY();C1=null;Hk=Fd();},Et=E(Bs),Gf=E(),FQ=b=>{if(window.console)console.warn('[JARJS GL] '+b);};
+function CP(){BK.call(this);this.bJ=null;}
+function Cp(){D.call(this);this.b6=null;}
+let Cx=null,CT=null,Cs=null,BD=()=>{BD=Bc(Cp);GR();},Fm=(a,b)=>{BD();a.b6=b;},Dp=a=>{let b=new Cp();Fm(b,a);return b;},ET=()=>{let b;BD();if(Cs===null){b=new ArrayBuffer(2);(new Int16Array(b))[0]=1;Cs=(new Int8Array(b))[0]?CT:Cx;}return Cs;},GR=()=>{Cx=Dp(F(27));CT=Dp(F(28));},BF=E(I),U=E(BF),E2=E(0);
+function CE(){let a=this;D.call(a);a.b$=Be;a.b5=Be;a.b7=null;a.bT=null;a.cb=null;a.ci=0;a.co=null;}
+let GU=null,BN=null,CD=0,Fj=0,F5=null,Bk=()=>{Bk=Bc(CE);Fc();},DZ=b=>{Bk();if(BN!==b)BN=b;BN.b5=Fy();},Da=()=>{Bk();return BN;},Df=b=>{let $p,$z;$p=0;if(C4()){let $T=X();$p=$T.l();b=$T.l();}_:while(true){switch($p){case 0:Bk();$p=1;case 1:GQ(b);if(B$()){break _;}return;default:Cz();}}X().s(b,$p);},Fi=(b,c)=>{let d,e;Bk();d=Da();e=new Dt;e.b4=d;e.bX=c;e.cj=FL(e,Fg(b,BO(2147483647))?2147483647:Dn(b));d.bT=e;},Fc=()=>{let b,c,d;b=new CE;Bk();c=null;b.b7=new D;b.ci=1;b.cb=F(29);b.co=c;d=CD;CD=d+1|0;b.b$=BO(d);GU
+=b;BN=b;CD=1;Fj=1;F5=new EG;},GQ=b=>{let thread=Fe();let javaThread=FG();if(thread.isResuming()){thread.status=0;let result=thread.attribute;if(result instanceof Error){throw result;}return result;}let callback=function(){};callback.W=val=>{thread.attribute=val;Dl(javaThread);thread.resume();};callback.by=e=>{thread.attribute=D5(e);Dl(javaThread);thread.resume();};callback=G3(callback);thread.suspend(()=>{try {Fi(b,callback);;}catch($e){callback.by($e);}});return null;},Z=E(I),D3=a=>{M(a);},Hp=()=>{let a=new Z();D3(a);return a;},B3
+=E(0);
+function Eu(){let a=this;CP.call(a);a.cf=null;a.cd=0;a.bH=null;a.cs=0;a.bM=0;}
+let B7=E(Z),Gj=E(I),DN=E(0),CO=E(),Cj=E(0);
+function D7(){let a=this;CO.call(a);a.cp=0;a.bN=null;a.cq=0.0;a.b_=0;}
+let Fw=a=>{let b,c;a.cp=0;b=O(D1,16);c=b.data;a.bN=b;a.cq=0.75;a.b_=c.length*0.75|0;},EY=()=>{let a=new D7();Fw(a);return a;},D$=E(0),Cn=E(0),Co=E(),EB=E(0),DM=E(0),Cr=E(Co),Dv=E(0);
+function Dd(){Cr.call(this);this.cg=null;}
+let Gy=a=>{a.cg=O(D,10);},Fd=()=>{let a=new Dd();Gy(a);return a;},Ef=E(0),EG=E();
+function FO(){let a=this;D.call(a);a.bU=0;a.b8=0;a.cl=null;a.bR=0;a.b9=0;a.ce=0;}
+let DB=E(I),GA=E(),DV=b=>{let c;c=(BV(b)).bE;if(c[G].itemType===null){b=new BF;M(b);H(b);}return Ei(b);},Ck=E(I),DL=E(0);
+function Dj(){D.call(this);this.bQ=null;}
+let G3=b=>{let c;c=new Dj;c.bQ=b;return c;},Eq=(a,b)=>{a.bQ.W(b);},Gn=(a,b)=>{a.bQ.by(b);},D6=E(0),DR=E(0),En=E(0);
+function Dt(){let a=this;D.call(a);a.b4=null;a.bX=null;a.cr=0;a.cj=0;}
+let Bz=E(CC),DI=(a,b,c)=>{D4(a);a.bC=b;a.bF=c;},Gh=(a,b)=>{let c,d,e,f;if(b>=0&&b<a.bF)return a.bz(b);c=new Z;d=a.bF;e=Bb();f=Bv(J(Bv(J(e,F(30)),b),F(31)),d);d=f.bD;f=f;Cf(f,d,d+1|0);f.bB.data[d]=41;L(c,Y(e));H(c);},Hr=a=>{return a.be();};
+function DH(){let a=this;Bz.call(a);a.bS=0;a.bK=null;a.bP=0;}
+let GC=a=>{return a.bS;},G2=(a,b)=>{return a.bK.getFloat32(b*4|0,!!a.bP);},GM=(a,b,c,d,e)=>{let f,g,h,i,j;b=b*4|0;while(true){f=e+(-1)|0;if(e<=0)break;g=c.data;h=a.bK;i=d+1|0;j=g[d];d=a.bP;h.setFloat32(b,j,!!d);b=b+4|0;e=f;d=i;}};
+function Ee(){let a=this;Bz.call(a);a.bY=0;a.bL=null;a.ca=null;}
+let FT=a=>{return a.bY;},Gi=(a,b)=>{return a.bL[b];},FD=(a,b,c,d,e)=>{let f;f=c.data.buffer;d=d*4|0;f=new Float32Array(f,d,e);a.bL.set(f,b);},Di=E(0);
+function CN(){let a=this;D.call(a);a.b2=null;a.ck=null;}
+function D1(){let a=this;CN.call(a);a.ch=0;a.b1=null;}
+let CS=E(I),ED=E(CS),E3=E(I),Db=E(0),C3=E(),C6=E(C3),Fn=E(C6),Hj=E();
+Gq([]);
+Dy([D,0,0,[],1,0,0,0,Bu,0,D,[],1537,0,0,0,Br,0,D,[],1537,0,0,0,Cu,0,D,[],1537,0,0,0,V,0,D,[Bu,Br,Cu],17,0,()=>Bm(),0,CQ,0,D,[Bu],1025,0,0,0,BA,0,CQ,[Br],1,0,()=>Bn(),0,CZ,0,D,[Bu,Cu],0,0,0,0,E$,0,D,[],1537,0,0,0,DD,0,CZ,[E$],1,0,0,0,Ba,0,D,[],1,0,0,0,Bs,0,Ba,[],1,0,0,0,I,0,Bs,[],1,0,0,0,By,0,D,[],1025,0,0,0,GD,0,By,[],17,0,0,0,Go,0,By,[],17,0,0,0,D9,0,D,[],1537,0,0,0,EQ,0,D,[D9],1537,0,0,0,Do,0,D,[],1537,0,0,0,Er,0,D,[EQ,Do],17,0,0,0,EM,0,D,[],1,0,()=>Bo(),0,F7,0,D,[],17,0,0,0,GL,0,D,[],17,0,0,0,G9,0,D,[],17,
+0,0,0,Dm,0,D,[],1,0,0,0,Dq,0,D,[],17,0,()=>Bq(),0,FK,0,D,[],17,0,0,0,DQ,0,D,[],1537,0,0,0,E7,0,D,[DQ],1,0,0,0,CG,0,D,[Br],1,0,()=>CB(),0,Gm,0,D,[],1,0,0,0,Gg,0,D,[],17,0,0,0,Fs,0,D,[],17,0,0,0,BK,0,D,[],1025,0,0,0,CC,0,BK,[Br],1025,0,0,0,Ge,0,D,[],17,0,0,0,DT,0,D,[],17,0,()=>BW(),0,FH,0,D,[],17,0,0,0,Gc,0,D,[],17,0,0,0,Gt,0,D,[],17,0,0,0,GT,0,D,[],17,0,0,0,Du,0,D,[],17,0,()=>Q(),0,Et,0,Bs,[],1,0,0,0,Gf,0,D,[],17,0,0,0,CP,0,BK,[Br],1025,0,0,0,Cp,0,D,[],17,0,()=>BD(),0,BF,0,I,[],1,0,0,0,U,0,BF,[],1,0,0,0,E2,0,
+D,[],1537,0,0,0,CE,0,D,[E2],1,0,()=>Bk(),0]);
+Dy([Z,0,I,[],1,0,0,0,B3,0,D,[],1537,0,0,0,Eu,0,CP,[B3],0,0,0,0,B7,0,Z,[],1,0,0,0,Gj,0,I,[],1,0,0,0,DN,0,D,[],1537,0,0,0,CO,0,D,[DN],1025,0,0,0,Cj,0,D,[],1537,0,0,0,D7,0,CO,[Cj,Bu],1,0,0,0,D$,0,D,[],1537,0,0,0,Cn,0,D,[D$],1537,0,0,0,Co,0,D,[Cn],1025,0,0,0,EB,0,D,[Cn],1537,0,0,0,DM,0,D,[EB],1537,0,0,0,Cr,0,Co,[DM],1025,0,0,0,Dv,0,D,[],1537,0,0,0,Dd,0,Cr,[Cj,Bu,Dv],1,0,0,0,Ef,0,D,[],1537,0,0,0,EG,0,D,[Ef],1,0,0,0,FO,0,D,[],16,0,0,0,DB,0,I,[],1,0,0,0,GA,0,D,[],17,0,0,0,Ck,0,I,[],1,0,0,0,DL,0,D,[],1537,0,0,0,Dj,
+0,D,[DL],0,0,0,["W",Ce(Eq),"by",Ce(Gn)],D6,0,D,[],1537,0,0,0,DR,0,D,[],1537,0,0,0,En,0,D,[],1537,0,0,0,Dt,0,D,[D6,DR,En],0,0,0,0,Bz,0,CC,[],1024,0,0,0,DH,0,Bz,[B3],0,0,0,["be",Ez(GC),"bz",Ce(G2),"bf",EA(GM)],Ee,0,Bz,[B3],0,0,0,["be",Ez(FT),"bz",Ce(Gi),"bf",EA(FD)],Di,0,D,[],1537,0,0,0,CN,0,D,[Di,Cj],0,0,0,0,D1,0,CN,[],0,0,0,0,CS,0,I,[],1,0,0,0,ED,0,CS,[],1,0,0,0,E3,0,I,[],1,0,0,0,Db,0,D,[],1537,0,0,0,C3,0,D,[Db],1025,0,0,0,C6,0,C3,[],1025,0,0,0,Fn,0,C6,[],1,0,0,0,Hj,0,D,[],1,0,0,0]);
+let GK=R(G$),F6=R(Dc),Ga=R(DW),Dr=R(Bx);
+F0(["0","<java_object>@","null","String contains invalid digits: ","String contains digits out of radix ",": ","The value is too big for integer type","The value is too big for int type: ","Illegal radix: ","String is empty","String is null","JARJS · 现代 GL20 自定义着色器演示","无法创建 WebGL 上下文（canvas#game 缺失或已被 2D 上下文占用）","#version 120\nattribute vec2 aPosition;\nattribute vec2 aTexCoord;\nvarying vec2 vUV;\nvoid main() {\n    vUV = aTexCoord;\n    gl_Position = vec4(aPosition, 0.0, 1.0);\n}\n","#version 120\nvarying vec2 vUV;\nuniform float uTime;\nuniform vec2 uResolution;\nvoid main() {\n    vec2 p = (vUV - 0.5) * 2.0;\n    p.x *= (uResolution.x / uResolution.y);\n    float dist = length(p);\n    \n    // 等离子体色彩波动方程\n    float v = sin(p.x * 6.0 + uTime * 1.5) + sin(p.y * 6.0 - uTime * 1.2);\n    v += sin(dist * 10.0 - uTime * 2.0);\n    \n    // 脉动光环\n    float ring = 0.03 / abs(dist - 0.55 - 0.08 * sin(uTime * 3.0));\n    \n    // 彩虹配色映射\n    float r = sin(v + 0.0) * 0.5 + 0.5;\n    float g = sin(v + 2.094) * 0."
++"5 + 0.5;\n    float b = sin(v + 4.188) * 0.5 + 0.5;\n    \n    vec3 col = vec3(r, g, b) * 0.7 + vec3(ring * 0.35, ring * 0.65, ring * 0.95);\n    gl_FragColor = vec4(col, 1.0);\n}\n","aPosition","aTexCoord","uTime","uResolution","着色器程序链接失败: ","","Shader 编译失败 (type=","): ","Capacity is negative: ","JARJS","Either src or dest is null","1","BIG_ENDIAN","LITTLE_ENDIAN","main","Index "," is outside of range [0;"]);
+V.prototype.toString=function(){return Bl(this);};
+V.prototype.valueOf=V.prototype.toString;D.prototype.toString=function(){return Bl(F$(this));};
+D.prototype.__teavm_class__=function(){return GY(this);};
+let C=Ff(G6);
+C.javaException=Fo;
+B.main=C;}));
+
+</script>
+<script>
+(function(){
+  var boot = (typeof window.main === 'function') ? window.main : (typeof main === 'function' ? main : null);
+  if (boot) { try { boot(); } catch (e) { console.error('[JARJS]', e); } }
+  else console.error('[JARJS] 未找到 main 入口');
+})();
+</script>
+<!--aigc-badge--><div data-aigc="notice" style="position:fixed;left:0;right:0;bottom:8px;z-index:2147483647;pointer-events:none;text-align:center;font:12px/1.5 'PingFang SC','Microsoft YaHei',sans-serif"><span style="display:inline-block;padding:3px 10px;border-radius:10px;background:rgba(255,255,255,.88);color:#555;border:1px solid rgba(0,0,0,.14)">内容由 AI生成，请仔细甄别</span></div>
+</body>
+</html>

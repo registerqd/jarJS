@@ -53,13 +53,9 @@ def main():
 
     print("共上传文件:", count)
 
-    # 清理上一轮误传到根目录的脚本
-    for stray in STRAY:
-        entries.append({"path": stray, "mode": "100644", "type": "blob", "sha": None})
-
     tree = req("POST", "/repos/%s/git/trees" % REPO, {"base_tree": base_tree, "tree": entries})
     newc = req("POST", "/repos/%s/git/commits" % REPO, {
-        "message": "feat(media): add OpenAL/WebAudio, FreeType/CanvasFont, base64 asset pipeline and MediaDemo",
+        "message": "feat(biggame): add GLContext caps, ImageIO/BufferedImage, SoundSystem and Netty Unsafe/WebSocket bridge (v0.5)",
         "tree": tree["sha"],
         "parents": [parent]
     })
