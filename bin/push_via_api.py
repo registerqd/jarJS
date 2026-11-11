@@ -36,7 +36,7 @@ def main():
         for fn in filenames:
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, ROOT).replace(os.sep, "/")
-            if rel.startswith(".") and not rel.startswith(".gitignore"):
+            if rel.startswith(".") and not rel.startswith(".gitignore") and not rel.startswith(".github/"):
                 continue
             if "target/" in rel:
                 continue
