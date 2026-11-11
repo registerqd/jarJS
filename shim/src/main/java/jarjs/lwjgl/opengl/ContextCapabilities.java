@@ -49,5 +49,20 @@ public class ContextCapabilities {
     public final boolean GL_ARB_occlusion_query = false;
     public final boolean GL_EXT_texture_filter_anisotropic = true;
 
+    // v0.6 补齐：MC 等应用会直接读这两个字段，缺了会走空指针分支
+    public final boolean GL_ARB_arrays_of_arrays = true;
+    public final boolean GL_ARB_texture_fog_distance = true;
+    public final boolean GL_NV_fog_distance_supported = true;
+    public final boolean GL_ARB_draw_buffers = true;
+    public final boolean GL_EXT_draw_buffers2 = false;
+    public final boolean GL_ARB_sampler_objects = false;
+    public final boolean GL_ARB_instanced_arrays = true;
+    public final boolean GL_ARB_map_buffer_range = false;
+    public final boolean GL_ARB_uniform_buffer_object = false;
+    public final boolean GL_EXT_framebuffer_multisample = false;
+    public final boolean GL_EXT_packed_depth_stencil = true;
+    public final boolean GL_EXT_texture_compression_s3tc = false;
+    public final boolean GL_ARB_texture_compression = false;
+
     ContextCapabilities() {}
 }

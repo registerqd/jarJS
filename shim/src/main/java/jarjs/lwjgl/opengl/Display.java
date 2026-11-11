@@ -131,4 +131,20 @@ public final class Display {
 
     public static long getStartTime() { return startTime; }
     public static float getPixelScaleFactor() { return 1f; }
+
+    // ================= v0.6 补齐 =================
+
+    public static DisplayMode getDesktopDisplayMode() { return mode; }
+    public static void setIcon(java.nio.ByteBuffer[] icons) {}
+    public static void setIcon(java.nio.ByteBuffer icon) {}
+    public static boolean wasResized() { return false; }
+    public static boolean isInsideWindow() { return true; }
+    public static void setLocation(int x, int y, int width, int height) {}
+    public static boolean isFocused() { return true; }
+    public static boolean isBorderless() { return false; }
+    public static void setBorderless(boolean b) {}
+    public static int getDesktopX() { return 0; }
+    public static int getDesktopY() { return 0; }
+    public static int getDesktopWidth() { return mode.getWidth(); }
+    public static int getDesktopHeight() { return mode.getHeight(); }
 }

@@ -216,4 +216,65 @@ public final class GL20 {
     public static void glDrawElements(int mode, int count, int type, long indices) {
         GLBackend.drawElementsNative(mode, count, type, (int) indices);
     }
+
+    // ================= v0.6 补齐：Uniform 数组重载 =================
+
+    public static void glUniform1(int location, IntBuffer values) {
+        if (values == null || values.remaining() < 1) return;
+        GLBackend.uniform1i(location, values.get(values.position()));
+    }
+
+    public static void glUniform2(int location, IntBuffer values) {
+        if (values == null || values.remaining() < 2) return;
+        int p = values.position();
+        GLBackend.uniform2i(location, values.get(p), values.get(p + 1));
+    }
+
+    public static void glUniform3(int location, IntBuffer values) {
+        if (values == null || values.remaining() < 3) return;
+        int p = values.position();
+        GLBackend.uniform3i(location, values.get(p), values.get(p + 1), values.get(p + 2));
+    }
+
+    public static void glUniform4(int location, IntBuffer values) {
+        if (values == null || values.remaining() < 4) return;
+        int p = values.position();
+        GLBackend.uniform4i(location, values.get(p), values.get(p + 1), values.get(p + 2), values.get(p + 3));
+    }
+
+    public static void glUniform2(int location, FloatBuffer values) {
+        if (values == null || values.remaining() < 2) return;
+        int p = values.position();
+        GLBackend.uniform2f(location, values.get(p), values.get(p + 1));
+    }
+
+    public static void glUniform3(int location, FloatBuffer values) {
+        if (values == null || values.remaining() < 3) return;
+        int p = values.position();
+        GLBackend.uniform3f(location, values.get(p), values.get(p + 1), values.get(p + 2));
+    }
+
+    public static void glUniform4(int location, FloatBuffer values) {
+        if (values == null || values.remaining() < 4) return;
+        int p = values.position();
+        GLBackend.uniform4f(location, values.get(p), values.get(p + 1), values.get(p + 2), values.get(p + 3));
+    }
+
+    public static void glUniform1fv(int location, int count, FloatBuffer values) {
+        if (values == null) return;
+        int n = Math.min(count, values.remaining());
+        float[] arr = new float[n];
+        int p = values.position();
+        for (int i = 0; i < n; i++) arr[i] = values.get(p + i);
+        GLBackend.uniform1fv(location, arr);
+    }
+
+    public static void glUniform4fv(int location, int count, FloatBuffer values) {
+        if (values == null) return;
+        int n = Math.min(count * 4, values.remaining());
+        float[] arr = new float[n];
+        int p = values.position();
+        for (int i = 0; i < n; i++) arr[i] = values.get(p + i);
+        GLBackend.uniform4fv(location, arr);
+    }
 }

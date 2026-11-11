@@ -1,10 +1,56 @@
-# jarJS v0.5
+# jarJS v0.6
 
 把 Java jar 一键转成浏览器可运行单文件 HTML 的现代化工具链。
 
 支持 **双渲染管线**：既支持经典 OpenGL 1.1 固定管线（立即模式、矩阵栈、逐顶点光照），也支持现代 **OpenGL 2.0+ 可编程着色器管线**（GLSL 自定义顶点/片段着色器、VBO/IBO 顶点缓冲、动态 Uniform、FBO 离屏渲染）。
 
 ---
+
+## v0.6：按真实工业应用实测的 386 条报错逐项修复
+
+这一版不是猜的，是把一个真实大型 Java 3D 客户端跑出来的报错（去重 169 个符号）逐类补齐后的结果。
+
+### 一、架构级修复（CLI）
+
+| 问题 | 修复 |
+|---|---|
+| CLI 只接受单个 jar，几十个外部库喂不进去 | **`--libs <dir>` / `--cp a.jar:b.jar`**：自动 install 进 Maven 本地仓库并注入 shade/converter 两个 pom |
+| TeaVM 遇错即停，永远看不到全貌 | **`--report`**：`bin/report.py` 直接解析 class 常量池，一次性输出全部缺失类，按包分组统计，不跑转译 |
+| 单机游戏被迫带上整条网络/加密链 | **`--offline`**：一键桩掉 `java.nio.channels` / `java.net` / `java.security` / `io.netty` |
+| 资源内嵌没进 build 流程 | `build` 末尾自动调用 `pack_assets.py`，产物直接内嵌（v0.4 已接，v0.6 起在 `--report` 之外全自动） |
+
+```bash
+# 真实大型项目的推荐跑法
+bash bin/jarjs.sh build app.jar -o app.html --libs ./libs --offline --lenient
+
+# 先看缺口，不浪费时间
+bash bin/jarjs.sh build app.jar --report --libs ./libs
+```
+
+### 二、shim API 补齐（按报错逐条）
+
+| 模块 | 补齐内容 |
+|---|---|
+| **GL11** | `glFog/glFogi/glFogf`、`glGetInteger/glGetFloat`、`glReadPixels`、`glGetTexImage`、`glMultMatrix`、`glTexGen/glTexGeni`、`glTexEnv/glTexEnvfv`、`glPolygonOffset`、`glLogicOp`、`glCopyTexSubImage2D`、`glClearAccum/glAccum`、`glStencilFunc/Op/Mask`、顶点数组 `Buffer` 重载 |
+| **ARB/EXT** | 新增 `ARBFramebufferObject`、`EXTFramebufferObject`、`ARBShaderObjects`、`ARBVertexShader`、`ARBVertexBufferObject`、`ARBMultitexture`、`EXTBlendFuncSeparate` 七个兼容类 |
+| **GL20** | `glUniform1/2/3/4` 的 `IntBuffer` / `FloatBuffer` 重载、`glUniform1fv/4fv(int,int,Buffer)` |
+| **GL30** | `glGenRenderbuffers`、`glBindRenderbuffer`、`glRenderbufferStorage`、`glFramebufferRenderbuffer`、`glDeleteRenderbuffers` |
+| **Unsafe** | `getIntVolatile`、`getLong/getLongVolatile`、`getObject/getObjectVolatile`、`putObjectVolatile`、`putOrderedInt/Long`、`throwException`、`allocateInstance` |
+| **net** | `Proxy`（含 `NO_PROXY`）、`Authenticator`、`PasswordAuthentication`、`InetAddress`、`InetSocketAddress` |
+| **awt** | 新增 `Image`（修掉 `Graphics.drawImage` 的悬空引用）、`Graphics.drawImage/dispose/create` |
+| **sound.midi** | `Synthesizer`、`MidiChannel`、`ShortMessage`、`MidiDevice` |
+| **Display / Mouse** | `getDesktopDisplayMode`、`setIcon`、`wasResized`、`isInsideWindow`、`getEventDWheel` |
+| **imageio** | `setUseCache/getUseCache`、`write` |
+| **ContextCapabilities** | 补 `GL_ARB_arrays_of_arrays`、`GL_ARB_texture_fog_distance` 等 12 个字段，全部预置 `true` |
+
+### 三、已知边界（不吹牛）
+
+- `java.util.concurrent` / `java.nio.channels` / `java.lang.Class` 反射等 **JDK 内部类无法用 shim 覆盖**（Java 模块系统禁止自定义 `java.*`），只能靠 `--offline` + `--lenient` 生成桩；桩能保证不崩，但不保证行为正确。
+- 自动补桩必须先解析参数类型、递归补依赖类，只补方法签名会在下一次编译时炸（v0.6 已把这个约束写进 `lenient.py` 注释）。
+- 自定义 GLSL 之外的桌面扩展（几何着色器、Compute Shader）不在射程内。
+
+---
+
 
 ## 针对工业大作与复杂桌面游戏（Minecraft 1.8 / Netty / LibGDX 等）的四项基础设施更新 (v0.5)
 

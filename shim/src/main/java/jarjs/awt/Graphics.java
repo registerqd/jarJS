@@ -74,4 +74,39 @@ public class Graphics {
         ctx.quadraticCurveTo(x, y, x + r, y);
         ctx.fill();
     }
+
+    // ================= v0.6 补齐：图片绘制与资源释放 =================
+
+    /** 绘制 BufferedImage（通过内部 Canvas 中转）。 */
+    public void drawImage(jarjs.awt.image.BufferedImage img, int x, int y, Object observer) {
+        if (img == null) return;
+        org.teavm.jso.dom.html.HTMLCanvasElement cv =
+                (org.teavm.jso.dom.html.HTMLCanvasElement) org.teavm.jso.browser.Window.current()
+                        .getDocument().createElement("canvas");
+        cv.setWidth(img.getWidth());
+        cv.setHeight(img.getHeight());
+        org.teavm.jso.canvas.CanvasRenderingContext2D c2 =
+                (org.teavm.jso.canvas.CanvasRenderingContext2D) cv.getContext("2d");
+        org.teavm.jso.canvas.ImageData data = c2.createImageData(img.getWidth(), img.getHeight());
+        int[] px = img.getRawPixels();
+        for (int i = 0; i < px.length; i++) {
+            int v = px[i];
+            data.getData().set(i * 4, (v >> 16) & 0xFF);
+            data.getData().set(i * 4 + 1, (v >> 8) & 0xFF);
+            data.getData().set(i * 4 + 2, v & 0xFF);
+            data.getData().set(i * 4 + 3, (v >>> 24) & 0xFF);
+        }
+        c2.putImageData(data, 0, 0);
+        ctx.drawImage(cv, x, y);
+    }
+
+    public void drawImage(Image img, int x, int y, Object observer) {
+        if (img instanceof Image.BufferedImageImage) {
+            drawImage(((Image.BufferedImageImage) img).image, x, y, observer);
+        }
+    }
+
+    public void dispose() {}
+
+    public Graphics create() { return this; }
 }

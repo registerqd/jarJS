@@ -80,4 +80,12 @@ public final class Mouse {
     public static void setCursorPosition(int x, int y) { jsSetCursorPosition(x, y); }
     public static boolean hasWheel() { return true; }
     public static int getNativeCursorCapabilities() { return 0; }
+
+    // ================= v0.6 补齐 =================
+
+    public static boolean isInsideWindow() { return true; }
+    public static int getEventDWheel() { return 0; }
+    public static long getEventNanosecondsPublic() { return System.nanoTime(); }
+    public static void setNativeCursor(Object cursor) {}
+    public static Object setNativeCursor(Object cursor, int hotSpotX, int hotSpotY) { return null; }
 }

@@ -71,7 +71,17 @@ def collect_missing(text):
     return classes, methods
 
 
+# v0.6：离线模式允许桩掉的网络/加密链
+OFFLINE_PREFIXES = (
+    'java.net.', 'java.nio.channels.', 'java.security.', 'javax.crypto.',
+    'javax.net.', 'sun.misc.', 'sun.nio.', 'io.netty.',
+)
+
+
 def is_user_class(cls):
+    # 离线模式：网络与加密链按「可桩类」处理，让单机程序不必真的实现 Socket
+    if os.environ.get('JARJS_OFFLINE') == '1' and cls.startswith(OFFLINE_PREFIXES):
+        return True
     return not cls.startswith(('java.', 'javax.', 'jdk.', 'sun.', 'org.teavm.'))
 
 

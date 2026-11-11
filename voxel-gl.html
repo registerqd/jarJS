@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta name="AIGC" content='{"Label":"1","ContentProducer":"001191340000711771143J00000","ProduceID":"6940733e-8b9f-41a0-b7f5-051d709272ba-8bed1e4c","ReservedCode1":"","ContentPropagator":"001191340000711771143J00000","PropagateID":"6940733e-8b9f-41a0-b7f5-051d709272ba-8bed1e4c","ReservedCode2":""}'>
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>demo.voxel.VoxelCraft · JARJS</title>
@@ -713,6 +713,16 @@ window.JARJS_ASSET_TABLE = {"assets/atlas.png":{"mime":"image/png","b64":"iVBORw
     if (canvas) canvas.style.cursor = g ? 'none' : 'default';
   };
   G.setCursorPosition = function (x, y) { mouse.x = x; mouse.y = y; };
+
+  /** v0.6：像素回读（glReadPixels 后端）。返回 RGBA 字节数组。 */
+  G.readPixelsData = function (x, y, w, h) {
+    if (!gl || w <= 0 || h <= 0) return null;
+    var buf = new Uint8Array(w * h * 4);
+    gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    var out = new Array(buf.length);
+    for (var i = 0; i < buf.length; i++) out[i] = buf[i];
+    return out;
+  };
 
   G.debugStats = function () {
     return {
@@ -1656,6 +1666,5 @@ B.main=C;}));
   else console.error('[JARJS] 未找到 main 入口');
 })();
 </script>
-<!--aigc-badge--><div data-aigc="notice" style="position:fixed;left:0;right:0;bottom:8px;z-index:2147483647;pointer-events:none;text-align:center;font:12px/1.5 'PingFang SC','Microsoft YaHei',sans-serif"><span style="display:inline-block;padding:3px 10px;border-radius:10px;background:rgba(255,255,255,.88);color:#555;border:1px solid rgba(0,0,0,.14)">内容由 AI生成，请仔细甄别</span></div>
 </body>
 </html>

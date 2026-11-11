@@ -140,4 +140,47 @@ public final class Unsafe {
     public boolean compareAndSwapInt(Object o, long offset, int expected, int x) { return true; }
     public boolean compareAndSwapLong(Object o, long offset, long expected, long x) { return true; }
     public boolean compareAndSwapObject(Object o, long offset, Object expected, Object x) { return true; }
+
+    // ================= v0.6 补齐：Netty 原子/易失读写 =================
+
+    public synchronized int getIntVolatile(Object o, long offset) { return getInt(offset); }
+    public synchronized void putIntVolatile(Object o, long offset, int x) { putInt(offset, x); }
+
+    public synchronized long getLongVolatile(Object o, long offset) { return getLong(offset); }
+    public synchronized void putLongVolatile(Object o, long offset, long x) { putLong(offset, x); }
+
+    public Object getObjectVolatile(Object o, long offset) { return null; }
+    public void putObjectVolatile(Object o, long offset, Object x) {}
+    public void putOrderedInt(Object o, long offset, int x) { putInt(offset, x); }
+    public void putOrderedLong(Object o, long offset, long x) { putLong(offset, x); }
+    public void putOrderedObject(Object o, long offset, Object x) {}
+
+    public Object getObject(Object o, long offset) { return null; }
+    public void putObject(Object o, long offset, Object x) {}
+
+    public int getInt(Object o, long offset) { return 0; }
+    public void putInt(Object o, long offset, int x) {}
+
+    public long getLong(Object o, long offset) { return 0; }
+    public void putLong(Object o, long offset, long x) {}
+
+    public byte getByte(Object o, long offset) { return 0; }
+    public void putByte(Object o, long offset, byte x) {}
+
+    public short getShort(Object o, long offset) { return 0; }
+    public void putShort(Object o, long offset, short x) {}
+
+    public void throwException(Throwable ee) {
+        if (ee instanceof RuntimeException) throw (RuntimeException) ee;
+        if (ee instanceof Error) throw (Error) ee;
+        throw new RuntimeException(ee);
+    }
+
+    public void ensureClassInitialized(Class<?> c) {}
+    public Class<?> defineClass(String name, byte[] b, int off, int len) { return null; }
+    public Class<?> defineAnonymousClass(Class<?> hostClass, byte[] data, Object[] cpPatches) { return null; }
+    public Object allocateInstance(Class<?> cls) throws InstantiationException {
+        try { return cls.getDeclaredConstructor().newInstance(); }
+        catch (Exception e) { throw new InstantiationException(e.getMessage()); }
+    }
 }

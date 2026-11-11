@@ -73,4 +73,31 @@ public final class GL30 {
     public static int glGenVertexArrays() { return 1; }
     public static void glBindVertexArray(int array) {}
     public static void glDeleteVertexArrays(int array) {}
+
+    // ================= v0.6 补齐：Renderbuffer =================
+
+    public static final int GL_RGBA8 = 0x8058;
+    public static final int GL_DEPTH_COMPONENT16 = 0x81A5;
+    public static final int GL_DEPTH_COMPONENT24 = 0x81A6;
+    public static final int GL_DEPTH24_STENCIL8 = 0x88F0;
+
+    private static int nextRboId = 1;
+
+    public static int glGenRenderbuffers() { return nextRboId++; }
+
+    public static void glGenRenderbuffers(java.nio.IntBuffer buffers) {
+        int pos = buffers.position();
+        int limit = buffers.limit();
+        for (int i = pos; i < limit; i++) buffers.put(i, nextRboId++);
+    }
+
+    public static void glBindRenderbuffer(int target, int renderbuffer) {}
+
+    public static void glRenderbufferStorage(int target, int internalformat, int width, int height) {}
+
+    public static void glFramebufferRenderbuffer(int target, int attachment, int renderbuffertarget, int renderbuffer) {}
+
+    public static void glDeleteRenderbuffers(int renderbuffer) {}
+
+    public static void glDeleteRenderbuffers(java.nio.IntBuffer buffers) {}
 }

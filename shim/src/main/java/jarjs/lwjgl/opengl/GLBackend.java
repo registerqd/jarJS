@@ -98,6 +98,12 @@ public final class GLBackend {
     @JSBody(params = {"msg"}, script = "if (window.console) console.warn('[JARJS GL] ' + msg);")
     public static native void warn(String msg);
 
+    /** v0.6：像素回读，返回 RGBA 字节数组。 */
+    @JSBody(params = {"x", "y", "w", "h"}, script =
+            "if (!window.JARJS_GL || !window.JARJS_GL.readPixelsData) return null;\n" +
+            "return window.JARJS_GL.readPixelsData(x, y, w, h);")
+    public static native byte[] readPixels(int x, int y, int w, int h);
+
     // =========================================================
     // ---------- 现代 OpenGL 2.0 着色器桥 ----------
     // =========================================================

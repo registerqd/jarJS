@@ -1081,5 +1081,42 @@ public final class GL {
         cr = a[17]; cg = a[18]; cb = a[19]; ca = a[20];
     }
 
+    /** v0.6：状态查询（返回合理的默认值，避免工业应用启动时读到 0 崩溃）。 */
+    public static int queryInt(int pname) {
+        switch (pname) {
+            case 0x0D33: return 4096;   // GL_MAX_TEXTURE_SIZE
+            case 0x851C: return 4096;   // GL_MAX_CUBE_MAP_TEXTURE_SIZE
+            case 0x8869: return 16;     // GL_MAX_VERTEX_ATTRIBS
+            case 0x8B4D: return 16;     // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
+            case 0x8B4C: return 16;     // GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS
+            case 0x8872: return 16;     // GL_MAX_TEXTURE_IMAGE_UNITS
+            case 0x8DFB: return 256;    // GL_MAX_VERTEX_UNIFORM_VECTORS
+            case 0x8DFD: return 224;    // GL_MAX_FRAGMENT_UNIFORM_VECTORS
+            case 0x8DFC: return 32;     // GL_MAX_VARYING_VECTORS
+            case 0x0D3A: return 1024;   // GL_MAX_VIEWPORT_DIMS
+            case 0x84E8: return 1024;   // GL_MAX_RENDERBUFFER_SIZE
+            case 0x0B21: return 1;      // GL_LINE_WIDTH
+            default: return 0;
+        }
+    }
+
+    public static float queryFloat(int pname) {
+        switch (pname) {
+            case 0x0B21: return lineWidth;   // GL_LINE_WIDTH
+            case 0x0B73: return 1.0f;        // GL_DEPTH_CLEAR_VALUE
+            default: return 0f;
+        }
+    }
+
+    /** v0.6：像素回读（WebGL 支持，直接交给 JS 后端）。 */
+    public static void readPixels(int x, int y, int w, int h, int format, int type, java.nio.ByteBuffer pixels) {
+        if (pixels == null || !initialized) return;
+        byte[] data = GLBackend.readPixels(x, y, w, h);
+        if (data == null) return;
+        int n = Math.min(data.length, pixels.remaining());
+        int pos = pixels.position();
+        for (int i = 0; i < n; i++) pixels.put(pos + i, data[i]);
+    }
+
     public static int getError() { return initialized ? GLBackend.getError() : 0; }
 }

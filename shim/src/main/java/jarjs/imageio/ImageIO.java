@@ -183,4 +183,15 @@ public final class ImageIO {
         return ((data[pos] & 0xFF) << 24) | ((data[pos + 1] & 0xFF) << 16)
              | ((data[pos + 2] & 0xFF) << 8) | (data[pos + 3] & 0xFF);
     }
+
+    // ================= v0.6 补齐 =================
+
+    private static boolean useCache = true;
+
+    public static void setUseCache(boolean cache) { useCache = cache; }
+    public static boolean getUseCache() { return useCache; }
+
+    public static boolean write(BufferedImage image, String formatName, java.io.File output) { return false; }
+    public static boolean write(BufferedImage image, String formatName, java.io.OutputStream output) { return false; }
+    public static boolean write(BufferedImage image, String formatName, java.io.File output, Object params) { return false; }
 }

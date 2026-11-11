@@ -391,4 +391,76 @@ public final class GL11 {
     public static void glPopAttrib() { GL.popAttrib(); }
     public static void glPushClientAttrib(int mask) {}
     public static void glPopClientAttrib() {}
+
+    // ================= v0.6 补齐：工业应用常用 GL11 接口 =================
+
+    // 顶点数组指针（Buffer 通用重载，兼容老代码传 Buffer 的写法）
+    public static void glVertexPointer(int size, int stride, java.nio.Buffer pointer) {
+        if (pointer instanceof FloatBuffer) GL.vertexPointer(size, stride, (FloatBuffer) pointer);
+    }
+
+    public static void glColorPointer(int size, int stride, java.nio.Buffer pointer) {
+        if (pointer instanceof FloatBuffer) GL.colorPointer(size, stride, (FloatBuffer) pointer);
+    }
+
+    public static void glTexCoordPointer(int size, int stride, java.nio.Buffer pointer) {
+        if (pointer instanceof FloatBuffer) GL.texCoordPointer(size, stride, (FloatBuffer) pointer);
+    }
+
+    public static void glNormalPointer(java.nio.Buffer pointer) {}
+
+    // 雾效（WebGL 无固定管线雾，接受参数不报错）
+    public static void glFog(int pname, float[] params) {}
+    public static void glFog(int pname, FloatBuffer params) {}
+    public static void glFogf(int pname, float param) {}
+    public static void glFogi(int pname, int param) {}
+    public static void glFogfv(int pname, float[] params) {}
+    public static void glFogfv(int pname, FloatBuffer params) {}
+
+    // 状态查询
+    public static int glGetInteger(int pname) { return GL.queryInt(pname); }
+    public static float glGetFloat(int pname) { return GL.queryFloat(pname); }
+    public static void glGetInteger(int pname, java.nio.IntBuffer params) {}
+    public static void glGetFloat(int pname, FloatBuffer params) {}
+    public static void glGetBoolean(int pname, java.nio.ByteBuffer params) {}
+
+    // 像素读取
+    public static void glReadPixels(int x, int y, int width, int height, int format, int type, java.nio.ByteBuffer pixels) {
+        GL.readPixels(x, y, width, height, format, type, pixels);
+    }
+
+    public static void glGetTexImage(int target, int level, int format, int type, java.nio.ByteBuffer pixels) {}
+
+    // 矩阵
+    public static void glMultMatrix(java.nio.FloatBuffer m) { GL.multMatrix(read16(m)); }
+
+    // 纹理坐标生成（自动纹理坐标，接受参数不报错）
+    public static void glTexGen(int coord, int pname, float[] params) {}
+    public static void glTexGen(int coord, int pname, FloatBuffer params) {}
+    public static void glTexGeni(int coord, int pname, int param) {}
+    public static void glTexGenf(int coord, int pname, float param) {}
+
+    // 纹理环境
+    public static void glTexEnv(int target, int pname, float[] params) {}
+    public static void glTexEnv(int target, int pname, FloatBuffer params) {}
+    public static void glTexEnvfv(int target, int pname, float[] params) {}
+    public static void glTexEnvfv(int target, int pname, FloatBuffer params) {}
+
+    // 多边形偏移 / 逻辑操作
+    public static void glPolygonOffset(float factor, float units) {}
+    public static void glLogicOp(int opcode) {}
+    public static void glPolygonStipple(java.nio.ByteBuffer mask) {}
+
+    // 纹理复制
+    public static void glCopyTexSubImage2D(int target, int level, int xoffset, int yoffset,
+                                           int x, int y, int width, int height) {}
+    public static void glCopyTexImage2D(int target, int level, int internalFormat,
+                                        int x, int y, int width, int height, int border) {}
+
+    // 累积缓冲 / 模板（空实现，保证签名完整）
+    public static void glClearAccum(float r, float g, float b, float a) {}
+    public static void glAccum(int op, float value) {}
+    public static void glStencilFunc(int func, int ref, int mask) {}
+    public static void glStencilOp(int fail, int zfail, int zpass) {}
+    public static void glStencilMask(int mask) {}
 }

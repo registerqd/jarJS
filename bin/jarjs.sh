@@ -45,7 +45,7 @@ cmd="${1:-}"; shift || true
 
 if [ "$cmd" != "build" ]; then
   cat <<'USAGE'
-JARJS v0.1 —— Java jar 到网页的一键转译器
+JARJS v0.6 —— Java jar 到网页的一键转译器
 
 用法:
   jarjs build app.jar -o app.html [选项]
@@ -53,6 +53,10 @@ JARJS v0.1 —— Java jar 到网页的一键转译器
 选项:
   -o, --output <file>    输出文件（.html 单文件 或 .js）
   --main <class>         指定入口类（默认读取 jar 的 Main-Class）
+  --libs <dir>           外部依赖目录：目录下所有 .jar 自动注入构建
+  --cp <a.jar:b.jar>     外部依赖列表（冒号分隔），与 --libs 等价
+  --offline              离线模式：桩掉网络/加密链，单机程序可直接跑
+  --report               静态扫描缺口：一次性输出全部缺失类与符号，不跑转译
   --lenient              宽松插桩：缺类自动补桩，不中断编译
   --width <px>           画布宽（默认 480）
   --height <px>          画布高（默认 480）
@@ -62,10 +66,15 @@ USAGE
 fi
 
 INPUT=""; OUTPUT="app.html"; MAIN=""; LENIENT=0; W=480; H=480
+LIBS_DIR=""; CP_EXTRA=""; OFFLINE=0; REPORT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -o|--output) OUTPUT="$2"; shift 2 ;;
     --main) MAIN="$2"; shift 2 ;;
+    --libs) LIBS_DIR="$2"; shift 2 ;;
+    --cp) CP_EXTRA="$2"; shift 2 ;;
+    --offline) OFFLINE=1; shift ;;
+    --report) REPORT=1; shift ;;
     --lenient) LENIENT=1; shift ;;
     --width) W="$2"; shift 2 ;;
     --height) H="$2"; shift 2 ;;
@@ -75,6 +84,36 @@ while [ $# -gt 0 ]; do
 done
 
 [ -f "$INPUT" ] || { echo "[JARJS] 找不到输入 jar: $INPUT"; exit 1; }
+
+# ---------- 收集外部依赖 ----------
+EXTRA_JARS=()
+if [ -n "$LIBS_DIR" ]; then
+  [ -d "$LIBS_DIR" ] || { echo "[JARJS] --libs 目录不存在: $LIBS_DIR"; exit 1; }
+  for j in "$LIBS_DIR"/*.jar; do [ -f "$j" ] && EXTRA_JARS+=("$j"); done
+fi
+if [ -n "$CP_EXTRA" ]; then
+  IFS=':' read -ra _cp_parts <<< "$CP_EXTRA"
+  for j in "${_cp_parts[@]}"; do [ -f "$j" ] && EXTRA_JARS+=("$j"); done
+fi
+
+EXTRA_DEPS=""
+if [ ${#EXTRA_JARS[@]} -gt 0 ]; then
+  echo "[JARJS] 注入外部依赖 ${#EXTRA_JARS[@]} 个..."
+  _idx=0
+  for j in "${EXTRA_JARS[@]}"; do
+    _idx=$((_idx + 1))
+    "$MVN" -B -q install:install-file -Dfile="$j" \
+      -DgroupId=jarjs.ext -DartifactId="lib$_idx" -Dversion=1.0 -Dpackaging=jar >/dev/null
+    EXTRA_DEPS="$EXTRA_DEPS<dependency><groupId>jarjs.ext</groupId><artifactId>lib$_idx</artifactId><version>1.0</version></dependency>"
+  done
+fi
+
+# ---------- 静态缺口扫描 ----------
+if [ "$REPORT" = "1" ]; then
+  echo "[JARJS] 静态扫描全部符号引用（不执行转译）..."
+  python3 "$JARJS_HOME/bin/report.py" "$INPUT" "$SHIM_JAR" ${LIBS_DIR:+"$LIBS_DIR"}
+  exit 0
+fi
 
 # 输出路径绝对化（后面会 cd 到临时构建目录）
 OUT_DIR="$(cd "$(dirname "$OUTPUT")" && pwd)"
@@ -113,6 +152,7 @@ cat > "$WORK/pom.xml" <<POM
     <dependency><groupId>jarjs</groupId><artifactId>shim</artifactId><version>1.0</version></dependency>
     <dependency><groupId>org.teavm</groupId><artifactId>teavm-classlib</artifactId><version>0.16.0</version><scope>provided</scope></dependency>
     <dependency><groupId>org.teavm</groupId><artifactId>teavm-jso-apis</artifactId><version>0.16.0</version><scope>provided</scope></dependency>
+    $EXTRA_DEPS
   </dependencies>
   <build>
     <plugins>
@@ -172,6 +212,7 @@ cat > conv-pom.xml <<POM
     <dependency><groupId>jarjs</groupId><artifactId>shim</artifactId><version>1.0</version></dependency>
     <dependency><groupId>org.teavm</groupId><artifactId>teavm-classlib</artifactId><version>0.16.0</version><scope>provided</scope></dependency>
     <dependency><groupId>org.teavm</groupId><artifactId>teavm-jso-apis</artifactId><version>0.16.0</version><scope>provided</scope></dependency>
+    $EXTRA_DEPS
   </dependencies>
   <build><plugins><plugin>
     <groupId>org.teavm</groupId><artifactId>teavm-maven-plugin</artifactId><version>0.16.0</version>
@@ -196,7 +237,7 @@ if [ ! -s "$JS" ]; then
   echo "[JARJS] 转译未产出有效 JS（类库缺失）"
   if [ "$LENIENT" = "1" ]; then
     echo "[JARJS] 宽松插桩模式：尝试补桩后重试..."
-    python3 "$JARJS_HOME/bin/lenient.py" "$WORK" "$MAIN" || true
+    JARJS_OFFLINE="$OFFLINE" python3 "$JARJS_HOME/bin/lenient.py" "$WORK" "$MAIN" || true
   fi
   [ -s "$JS" ] || { echo "[JARJS] 失败：产物为空"; exit 2; }
 fi

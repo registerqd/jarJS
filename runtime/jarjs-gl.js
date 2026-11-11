@@ -684,6 +684,16 @@
   };
   G.setCursorPosition = function (x, y) { mouse.x = x; mouse.y = y; };
 
+  /** v0.6：像素回读（glReadPixels 后端）。返回 RGBA 字节数组。 */
+  G.readPixelsData = function (x, y, w, h) {
+    if (!gl || w <= 0 || h <= 0) return null;
+    var buf = new Uint8Array(w * h * 4);
+    gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    var out = new Array(buf.length);
+    for (var i = 0; i < buf.length; i++) out[i] = buf[i];
+    return out;
+  };
+
   G.debugStats = function () {
     return {
       width: canvas ? canvas.width : 0,
