@@ -43,7 +43,40 @@ bash bin/jarjs.sh build app.jar --report --libs ./libs
 | **imageio** | `setUseCache/getUseCache`、`write` |
 | **ContextCapabilities** | 补 `GL_ARB_arrays_of_arrays`、`GL_ARB_texture_fog_distance` 等 12 个字段，全部预置 `true` |
 
-### 三、已知边界（不吹牛）
+### 三、全自动补桩（v0.7 新增，其他 AI 直接调用即可）
+
+不需要任何一方手写补桩程序，一条 `--auto` 跑完整个闭环：
+
+```bash
+bash bin/jarjs.sh build app.jar -o app.html --libs ./libs --auto
+```
+
+内部由 `bin/autostub.py` 完成：
+
+1. 编译 → 抓 TeaVM 报错
+2. 解析缺失类 / 缺失方法
+3. **递归解析参数与返回类型**，把依赖类一并补齐（v0.6 之前正是缺这一步才炸）
+4. 每轮 **从干净状态全量重建** 桩源码，绝不在脏补丁上叠加
+5. 桩类 **不 implements 任何接口**，避免抽象方法未实现
+6. 循环到通过 / 无可补项 / 达到 `--max-rounds`（默认 30）
+7. 输出 `autostub-report.json` 与 `autostub.log`
+
+也可以单独调用引擎：
+
+```bash
+python3 bin/autostub.py <work_dir> <MainClass> [--offline] [--max-rounds 30] --cp <额外classpath>
+```
+
+实测（`demo3` 故意删掉 `com.example.missing.Foo`）：
+
+```
+第 1 轮补类: com.example.missing.Foo
+第 2 轮补方法: com.example.missing.Foo.bar
+第 3 轮补方法: com.example.missing.Foo.baz
+第 4 轮编译通过，补桩完成
+```
+
+### 四、已知边界（不吹牛）
 
 - `java.util.concurrent` / `java.nio.channels` / `java.lang.Class` 反射等 **JDK 内部类无法用 shim 覆盖**（Java 模块系统禁止自定义 `java.*`），只能靠 `--offline` + `--lenient` 生成桩；桩能保证不崩，但不保证行为正确。
 - 自动补桩必须先解析参数类型、递归补依赖类，只补方法签名会在下一次编译时炸（v0.6 已把这个约束写进 `lenient.py` 注释）。
