@@ -1,8 +1,21 @@
-# jarJS v0.3
+# jarJS v0.4
 
 把 Java jar 一键转成浏览器可运行单文件 HTML 的现代化工具链。
 
 支持 **双渲染管线**：既支持经典 OpenGL 1.1 固定管线（立即模式、矩阵栈、逐顶点光照），也支持现代 **OpenGL 2.0+ 可编程着色器管线**（GLSL 自定义顶点/片段着色器、VBO/IBO 顶点缓冲、动态 Uniform、FBO 离屏渲染）。
+
+v0.4 补齐了桌面游戏依赖的**三大 native 能力**，全部改为浏览器原生实现、构建时自动处理：
+
+| 能力 | 桌面原生库 | jarJS 替代方案 | 是否自动 |
+|---|---|---|---|
+| 音频 | OpenAL（native） | **Web Audio API**：PCM 直接建 AudioBuffer，支持增益/音高/循环/声像 | ✅ 自动 |
+| 字体 | FreeType（native） | **Canvas2D 光栅化**：文字画到 canvas 后直接作纹理上传 | ✅ 自动 |
+| 图像/音频解码 | stb_image / libvorbis | **浏览器 Image + decodeAudioData** | ✅ 自动 |
+| 资源打包 | 文件系统读取 | **构建时扫描 jar，全部转 base64 内嵌** | ✅ 自动 |
+
+构建时 `bin/pack_assets.py` 会扫描 jar 内所有 `.png/.jpg/.ogg/.wav/.ttf/.fnt/.json/.glsl` 等资源，转成 `window.JARJS_ASSET_TABLE` 内嵌进 HTML；运行时 `jarjs.assets.Assets` / `ImageLoader` / `CanvasFont` / `AL10` 直接从内存取，**不发任何网络请求、不需要任何 native 库**。
+
+> 音频受浏览器自动播放策略限制：首次点击画面或按键后自动解锁（`AudioContext` 只在用户手势后创建，避免无手势环境下与 WebGL 争抢资源）。
 
 ---
 

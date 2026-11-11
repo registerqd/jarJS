@@ -5,8 +5,10 @@ import base64, json, os, sys, urllib.request, urllib.error
 TOKEN = os.environ["GH_TOKEN"]
 REPO = "registerqd/jarJS"
 API = "https://api.github.com"
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", "target", "node_modules"}
+# 上一次误传到仓库根目录的文件，需要从树里删掉
+STRAY = ["assemble.py", "jarjs.sh", "lenient.py", "pack_assets.py", "push_via_api.py"]
 
 
 def req(method, path, data=None):
@@ -50,6 +52,11 @@ def main():
                 print("  已上传 blob:", count)
 
     print("共上传文件:", count)
+
+    # 清理上一轮误传到根目录的脚本
+    for stray in STRAY:
+        entries.append({"path": stray, "mode": "100644", "type": "blob", "sha": None})
+
     tree = req("POST", "/repos/%s/git/trees" % REPO, {"base_tree": base_tree, "tree": entries})
     newc = req("POST", "/repos/%s/git/commits" % REPO, {
         "message": "feat(media): add OpenAL/WebAudio, FreeType/CanvasFont, base64 asset pipeline and MediaDemo",

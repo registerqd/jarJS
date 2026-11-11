@@ -111,6 +111,9 @@
     gl.vertexAttribPointer(loc.color, 4, gl.FLOAT, false, stride, 12);
     gl.vertexAttribPointer(loc.uv, 2, gl.FLOAT, false, stride, 28);
 
+    // 与 OpenGL 纹理坐标习惯对齐：图像/Canvas 上传时翻转 Y，使 v=0 对应图像底部
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
     gl.clearColor(0, 0, 0, 1);
@@ -266,6 +269,40 @@
     var t = textures[id];
     if (t && t.tex && gl) gl.deleteTexture(t.tex);
     delete textures[id];
+  };
+
+  /** 文字直接光栅化到 Canvas 后上传为纹理（避免大数组跨语言传递），返回 [w, h]。 */
+  G.texImageText = function (id, text, family, size, bold, italic) {
+    if (!gl) return [1, 1];
+    var font = (italic ? 'italic ' : '') + (bold ? 'bold ' : '') +
+               size + 'px ' + (family || 'sans-serif');
+
+    var probe = document.createElement('canvas');
+    var pcx = probe.getContext('2d');
+    pcx.font = font;
+    var w = Math.max(1, Math.ceil(pcx.measureText(text || ' ').width) + 4);
+    var h = Math.max(1, Math.ceil(size * 1.5));
+
+    var cv = document.createElement('canvas');
+    cv.width = w;
+    cv.height = h;
+    var cx = cv.getContext('2d');
+    cx.font = font;
+    cx.textBaseline = 'alphabetic';
+    cx.fillStyle = '#ffffff';
+    cx.fillText(text || '', 2, Math.round(size * 1.1));
+
+    // 先把采样参数设好（非 2 的幂尺寸必须 CLAMP），再上传像素，避免 WebGL1 纹理不完整
+    var t = textures[id] || (textures[id] = {});
+    if (!t.tex) t.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv);
+    t.w = w; t.h = h; t.pixels = null; t.dirty = false;
+    return [w, h];
   };
 
   G.isTextureReady = function (id) { return !!textures[id]; };

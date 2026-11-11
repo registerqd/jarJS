@@ -21,6 +21,11 @@ public final class GLBackend {
             script = "window.JARJS_GL.texImage(id, w, h, argb, filter, wrap);")
     public static native void texImage(int id, int w, int h, int[] argb, int filter, int wrap);
 
+    /** 直接把一段文字光栅化到 Canvas 并作为纹理上传，返回 [width, height]。 */
+    @JSBody(params = {"id", "text", "family", "size", "bold", "italic"},
+            script = "return window.JARJS_GL.texImageText(id, text, family, size, bold, italic);")
+    public static native int[] texImageText(int id, String text, String family, float size, boolean bold, boolean italic);
+
     @JSBody(params = {"id"}, script = "window.JARJS_GL.deleteTexture(id);")
     public static native void deleteTexture(int id);
 

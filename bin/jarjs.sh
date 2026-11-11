@@ -198,6 +198,10 @@ if [ ! -s "$JS" ]; then
   [ -s "$JS" ] || { echo "[JARJS] 失败：产物为空"; exit 2; }
 fi
 
+echo "[JARJS] 扫描并内嵌资源（base64）..."
+ASSETS_JS="$WORK/assets.js"
+python3 "$JARJS_HOME/bin/pack_assets.py" "$SHADED" "$ASSETS_JS"
+
 echo "[JARJS] 组装单文件 HTML..."
-python3 "$JARJS_HOME/bin/assemble.py" "$JS" "$OUTPUT" "$W" "$H" "$MAIN"
+python3 "$JARJS_HOME/bin/assemble.py" "$JS" "$OUTPUT" "$W" "$H" "$MAIN" "$ASSETS_JS"
 echo "[JARJS] 完成: $OUTPUT ($(wc -c < "$OUTPUT") 字节)"

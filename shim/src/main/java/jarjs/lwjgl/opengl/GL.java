@@ -511,6 +511,13 @@ public final class GL {
 
     public static int genTexture() { return nextTexId++; }
 
+    /** 登记一个由 JS 侧直接上传的纹理尺寸，让固定管线知道它可以被采样。 */
+    public static void registerTexture(int id, int w, int h) {
+        Texture t = textures.get(id);
+        if (t == null) { t = new Texture(); textures.put(id, t); }
+        t.w = w; t.h = h; t.argb = null; t.dirty = false;
+    }
+
     public static void bindTexture(int id) { boundTex = id; }
 
     public static void deleteTexture(int id) {
