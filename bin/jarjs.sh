@@ -57,6 +57,7 @@ JARJS v0.6 —— Java jar 到网页的一键转译器
   --cp <a.jar:b.jar>     外部依赖列表（冒号分隔），与 --libs 等价
   --offline              离线模式：桩掉网络/加密链，单机程序可直接跑
   --report               静态扫描缺口：一次性输出全部缺失类与符号，不跑转译
+  --auto                 全自动补桩：递归补依赖类，循环到通过（推荐给其他 AI 直接调用）
   --lenient              宽松插桩：缺类自动补桩，不中断编译
   --width <px>           画布宽（默认 480）
   --height <px>          画布高（默认 480）
@@ -66,7 +67,7 @@ USAGE
 fi
 
 INPUT=""; OUTPUT="app.html"; MAIN=""; LENIENT=0; W=480; H=480
-LIBS_DIR=""; CP_EXTRA=""; OFFLINE=0; REPORT=0
+LIBS_DIR=""; CP_EXTRA=""; OFFLINE=0; REPORT=0; AUTO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -o|--output) OUTPUT="$2"; shift 2 ;;
@@ -75,6 +76,7 @@ while [ $# -gt 0 ]; do
     --cp) CP_EXTRA="$2"; shift 2 ;;
     --offline) OFFLINE=1; shift ;;
     --report) REPORT=1; shift ;;
+    --auto) AUTO=1; shift ;;
     --lenient) LENIENT=1; shift ;;
     --width) W="$2"; shift 2 ;;
     --height) H="$2"; shift 2 ;;
@@ -235,7 +237,16 @@ mkdir -p conv/src
 JS="$WORK/conv/target/teavm/classes.js"
 if [ ! -s "$JS" ]; then
   echo "[JARJS] 转译未产出有效 JS（类库缺失）"
-  if [ "$LENIENT" = "1" ]; then
+  if [ "$AUTO" = "1" ]; then
+    echo "[JARJS] 全自动补桩：递归补依赖类，循环到通过..."
+    EXTRA_CP="$SHADED"
+    if [ "$OFFLINE" = "1" ]; then
+      python3 "$JARJS_HOME/bin/autostub.py" "$WORK" "$MAIN" --offline --cp "$EXTRA_CP" || true
+    else
+      python3 "$JARJS_HOME/bin/autostub.py" "$WORK" "$MAIN" --cp "$EXTRA_CP" || true
+    fi
+    JS="$WORK/conv/target/teavm/classes.js"
+  elif [ "$LENIENT" = "1" ]; then
     echo "[JARJS] 宽松插桩模式：尝试补桩后重试..."
     JARJS_OFFLINE="$OFFLINE" python3 "$JARJS_HOME/bin/lenient.py" "$WORK" "$MAIN" || true
   fi
