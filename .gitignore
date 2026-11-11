@@ -1,0 +1,13 @@
+target/
+**/target/
+*.class
+*.jar
+*.war
+*.ear
+*.html
+*.log
+.DS_Store
+.idea/
+*.iml
+.vscode/
+test-*.cjs
