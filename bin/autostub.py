@@ -30,15 +30,22 @@ def _find_tool(env_key, candidates, fallback):
     for c in candidates:
         if c and os.path.exists(c):
             return c
+    # Windows 环境优先匹配 .cmd / .exe
+    if os.name == 'nt':
+        for ext in ('.cmd', '.bat', '.exe', ''):
+            cand = fallback + ext
+            found = shutil.which(cand)
+            if found:
+                return found
     found = shutil.which(fallback)
     return found or fallback
 
 
 MVN = _find_tool('MVN', ['/data/apache-maven-3.9.16/bin/mvn'], 'mvn')
 JAVA_HOME = _find_tool('JAVA_HOME', ['/data/jdk-21.0.13+9'], 'java')
-if JAVA_HOME.endswith('/java'):
+if JAVA_HOME and (JAVA_HOME.endswith('/java') or JAVA_HOME.endswith('\\java') or JAVA_HOME.endswith('\\java.exe')):
     JAVA_HOME = os.path.dirname(os.path.dirname(JAVA_HOME))
-JAVAC = os.path.join(JAVA_HOME, 'bin', 'javac') if JAVA_HOME else 'javac'
+JAVAC = os.path.join(JAVA_HOME, 'bin', 'javac.exe' if os.name == 'nt' else 'javac') if JAVA_HOME else 'javac'
 
 PRIM = {'V': 'void', 'Z': 'boolean', 'B': 'byte', 'C': 'char',
         'S': 'short', 'I': 'int', 'J': 'long', 'F': 'float', 'D': 'double'}
@@ -89,7 +96,8 @@ class AutoStubber:
     # ---------------- 编译 ----------------
     def build(self):
         r = subprocess.run([MVN, '-B', 'package'], cwd=self.conv,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True,
+                           shell=(os.name == 'nt'))
         return r.returncode, (r.stdout or '') + (r.stderr or '')
 
     # ---------------- 错误解析 ----------------

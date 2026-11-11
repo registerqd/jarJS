@@ -1,8 +1,63 @@
-# jarJS v0.6
+# jarJS v0.8
 
 把 Java jar 一键转成浏览器可运行单文件 HTML 的现代化工具链。
 
-支持 **双渲染管线**：既支持经典 OpenGL 1.1 固定管线（立即模式、矩阵栈、逐顶点光照），也支持现代 **OpenGL 2.0+ 可编程着色器管线**（GLSL 自定义顶点/片段着色器、VBO/IBO 顶点缓冲、动态 Uniform、FBO 离屏渲染）。
+支持 **全平台运行**（Windows CMD / Windows PowerShell / Linux / macOS Bash）与 **双渲染管线**（经典 OpenGL 1.1 固定管线 + 现代 OpenGL 2.0+ 可编程着色器管线）。
+
+---
+
+## Windows 版本支持 (v0.8 新增)
+
+无论是 Windows 命令提示符 (CMD) 还是现代 PowerShell 终端，jarJS 均提供原生脚本一键调用，自动完成环境检测与依赖构建：
+
+| 平台 / 终端 | 快速调用入口 | 完整入口 | 说明 |
+|---|---|---|---|
+| **Windows CMD** | `jarjs.bat build app.jar [选项]` | `bin\jarjs.bat build ...` | 原生批处理，自动检测 `py/python`、`JAVA_HOME` 与 `mvn.cmd` |
+| **Windows PowerShell** | `.\jarjs.ps1 build app.jar [选项]` | `.\bin\jarjs.ps1 build ...` | 原生 PS1 脚本，支持参数管道与结构化错误捕获 |
+| **Linux / macOS Bash** | `bash bin/jarjs.sh build app.jar [选项]` | `bin/jarjs.sh build ...` | 标准 Bash 脚本，自动处理路径与权限 |
+
+### Windows 自动环境探测
+- **Python**：自动探测 `python`、`py -3`、`py`、`python3` 或 `PYTHON` 环境变量；
+- **JDK 21+**：优先读 `JAVA_HOME`，其次探测 PATH 中的 `javac`，再自动搜索 `Program Files\Java`、`Eclipse Adoptium`、`Microsoft`、`Zulu` 等常见安装目录；
+- **Maven**：优先读 `MVN`、`MAVEN_HOME`，其次自动定位 `mvn.cmd` 或 `Program Files\apache-maven`。
+
+---
+
+## 快速上手
+
+### 基本用法（Windows 与 Linux 通用）
+
+#### Windows 命令提示符 (CMD)
+```cmd
+:: 1. 基础转译
+jarjs.bat build mygame.jar -o mygame.html --width 800 --height 600
+
+:: 2. 注入外部依赖 + 全自动补桩
+jarjs.bat build mygame.jar -o mygame.html --libs .\libs --auto
+
+:: 3. 静态扫描缺口报告（不跑转译）
+jarjs.bat build mygame.jar --report --libs .\libs
+```
+
+#### Windows PowerShell
+```powershell
+# 1. 基础转译
+.\jarjs.ps1 build mygame.jar -o mygame.html -Width 800 -Height 600
+
+# 2. 注入外部依赖 + 离线模式 + 全自动补桩
+.\jarjs.ps1 build mygame.jar -o mygame.html -Libs .\libs -Offline -Auto
+```
+
+#### Linux / macOS
+```bash
+# 1. 基础转译
+bash bin/jarjs.sh build mygame.jar -o mygame.html --width 800 --height 600
+
+# 2. 注入外部依赖 + 自动补桩
+bash bin/jarjs.sh build mygame.jar -o mygame.html --libs ./libs --auto
+```
+
+产物为一个**自包含的单文件 `.html`**，双击或部署到任意静态 Web 服务器即可运行。
 
 ---
 
