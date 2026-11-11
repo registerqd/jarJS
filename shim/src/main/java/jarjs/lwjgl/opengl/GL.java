@@ -871,8 +871,8 @@ public final class GL {
         return s == null ? "" : s;
     }
 
-    // ================= 顶点数组（client state） =================
-
+    // 顶点数组（client state）
+    public static int currentProgram = 0;
     private static java.nio.FloatBuffer vpBuf, cpBuf, tpBuf;
     private static int vpSize = 3, vpStride = 0, cpSize = 4, cpStride = 0, tpSize = 2, tpStride = 0;
     private static boolean vpOn, cpOn, tpOn;
@@ -907,6 +907,10 @@ public final class GL {
 
     public static void drawArrays(int mode, int first, int count) {
         if (count <= 0) return;
+        if (currentProgram != 0 || !vpOn) {
+            GLBackend.drawArraysNative(mode, first, count);
+            return;
+        }
         float[] out = new float[count * 9];
         for (int i = 0; i < count; i++) fillVertex(out, i * 9, first + i);
         submitExpanded(mode, out, count);

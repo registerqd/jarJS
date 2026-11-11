@@ -1,5 +1,8 @@
-/* JARJS OpenGL → WebGL 运行时
- * 职责：只做 WebGL 的搬运与状态映射。固定管线语义（矩阵、光照、图元展开）在 Java 侧。
+/* JARJS OpenGL → WebGL 运行时 (v0.3 - 含现代可编程管线)
+ * 职责：
+ * 1. 完整保持固定管线内置 Shader 和图元绘制后端（GL 1.1 语义）
+ * 2. 纯增量提供现代管线桥接（GL 2.0 / 1.5 / 1.4 / 1.3 / 3.0：Shader, Program, Uniform, Attrib, VBO, FBO）
+ * 3. 桌面 GLSL 自动预处理
  */
 (function () {
   'use strict';
@@ -22,7 +25,7 @@
   var closeRequested = false;
   var lost = false;
 
-  // ---------- 着色器 ----------
+  // ---------- 固定管线内置着色器 ----------
   var VS = [
     'attribute vec3 aPos;',
     'attribute vec4 aColor;',
@@ -56,7 +59,7 @@
     gl.shaderSource(s, src);
     gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-      console.error('[JARJS GL] shader 编译失败: ' + gl.getShaderInfoLog(s));
+      console.error('[JARJS GL] 内置 shader 编译失败: ' + gl.getShaderInfoLog(s));
       return null;
     }
     return s;
@@ -86,7 +89,7 @@
     gl.attachShader(prog, fs);
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      console.error('[JARJS GL] program 链接失败: ' + gl.getProgramInfoLog(prog));
+      console.error('[JARJS GL] 内置 program 链接失败: ' + gl.getProgramInfoLog(prog));
       return 0;
     }
     gl.useProgram(prog);
@@ -119,7 +122,7 @@
       e.preventDefault(); lost = true; console.warn('[JARJS GL] WebGL 上下文丢失');
     }, false);
     canvas.addEventListener('webglcontextrestored', function () {
-      lost = false; console.warn('[JARJS GL] WebGL 上下文已恢复，纹理需重新上传');
+      lost = false; console.warn('[JARJS GL] WebGL 上下文已恢复');
       for (var k in textures) { if (textures.hasOwnProperty(k)) textures[k].dirty = true; }
     }, false);
 
@@ -143,7 +146,6 @@
   };
 
   G.setVSync = function (v) {};
-
   G.contextLost = function () { return lost; };
 
   G.clear = function (r, g, b, a, mask) {
@@ -170,14 +172,22 @@
     else { gl.disable(gl.CULL_FACE); }
   };
 
-  G.blendFunc = function (src, dst) {
-    if (!gl) return;
-    gl.blendFunc(src, dst);
-  };
-
+  G.blendFunc = function (src, dst) { if (gl) gl.blendFunc(src, dst); };
+  G.blendFuncSeparate = function (sR, dR, sA, dA) { if (gl) gl.blendFuncSeparate(sR, dR, sA, dA); };
+  G.blendEquation = function (mode) { if (gl) gl.blendEquation(mode); };
   G.lineWidth = function (w) { if (gl) gl.lineWidth(w); };
-  G.pointSize = function (s) { /* WebGL 固定 1px，保留接口 */ };
+  G.pointSize = function (s) {};
+  G.viewport = function (x, y, w, h) { if (gl) gl.viewport(x, y, w, h); };
+  G.scissor = function (x, y, w, h) { if (gl) gl.scissor(x, y, w, h); };
+  G.enable = function (cap) { if (gl) gl.enable(cap); };
+  G.disable = function (cap) { if (gl) gl.disable(cap); };
+  G.depthFunc = function (f) { if (gl) gl.depthFunc(f); };
+  G.depthMask = function (m) { if (gl) gl.depthMask(!!m); };
+  G.colorMask = function (r, g, b, a) { if (gl) gl.colorMask(!!r, !!g, !!b, !!a); };
+  G.cullFace = function (m) { if (gl) gl.cullFace(m); };
+  G.frontFace = function (m) { if (gl) gl.frontFace(m); };
 
+  // ---------- 固定管线立即模式提交 ----------
   G.draw = function (mode, verts, count, mvp, texId, flags) {
     if (!gl || !prog || count <= 0) return;
     gl.useProgram(prog);
@@ -193,6 +203,15 @@
 
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+
+    // 确保固定管线属性槽位正确
+    gl.enableVertexAttribArray(loc.pos);
+    gl.enableVertexAttribArray(loc.color);
+    gl.enableVertexAttribArray(loc.uv);
+    var stride = 9 * 4;
+    gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, stride, 0);
+    gl.vertexAttribPointer(loc.color, 4, gl.FLOAT, false, stride, 12);
+    gl.vertexAttribPointer(loc.uv, 2, gl.FLOAT, false, stride, 28);
 
     gl.uniformMatrix4fv(loc.mvp, false, new Float32Array(mvp));
 
@@ -212,7 +231,7 @@
     gl.drawArrays(mode, 0, count);
   };
 
-  // ---------- 纹理 ----------
+  // ---------- 纹理管理 ----------
   function uploadTexture(id, t) {
     if (!t || !t.pixels) { t && (t.dirty = false); return; }
     if (!t.tex) t.tex = gl.createTexture();
@@ -251,12 +270,295 @@
 
   G.isTextureReady = function (id) { return !!textures[id]; };
 
+  G.bindTexture = function (target, id) {
+    if (!gl) return;
+    var t = textures[id];
+    gl.bindTexture(target || gl.TEXTURE_2D, t ? t.tex : null);
+  };
+
+  G.activeTexture = function (unit) {
+    if (!gl) return;
+    var idx = (unit >= 0x84C0) ? (unit - 0x84C0) : unit;
+    gl.activeTexture(gl.TEXTURE0 + idx);
+  };
+
+  // ==============================================================
+  // ---------- 现代 OpenGL 2.0+ 着色器管线纯增量扩展 ----------
+  // ==============================================================
+
+  var nextShaderId = 1, shaders = {};
+  var nextProgId = 1, programs = {};
+  var nextLocId = 1, locations = {};
+  var nextBufId = 1, buffers = {};
+  var nextFboId = 1, framebuffers = {};
+
+  function preprocessGLSL(src, type) {
+    if (!src) return '';
+    var s = src.replace(/^\s*#version\s+\d+.*$/gm, '');
+    if (type === 0x8B30) { // FRAGMENT_SHADER
+      if (!/precision\s+(mediump|highp|lowp)\s+float;/.test(s)) {
+        s = 'precision mediump float;\n' + s;
+      }
+    }
+    return s;
+  }
+
+  G.createShader = function (type) {
+    if (!gl) return 0;
+    var s = gl.createShader(type);
+    if (!s) return 0;
+    var id = nextShaderId++;
+    shaders[id] = { obj: s, type: type, src: '', log: '' };
+    return id;
+  };
+
+  G.shaderSource = function (id, src) {
+    var s = shaders[id];
+    if (s) s.src = src;
+  };
+
+  G.compileShader = function (id) {
+    var s = shaders[id];
+    if (!s || !gl) return;
+    var processed = preprocessGLSL(s.src, s.type);
+    gl.shaderSource(s.obj, processed);
+    gl.compileShader(s.obj);
+    var ok = gl.getShaderParameter(s.obj, gl.COMPILE_STATUS);
+    s.log = gl.getShaderInfoLog(s.obj) || '';
+    if (!ok) console.error('[JARJS GL] Shader 编译错误: ' + s.log + '\n源码:\n' + processed);
+  };
+
+  G.getShaderi = function (id, pname) {
+    var s = shaders[id];
+    if (!s || !gl) return 0;
+    if (pname === 0x8B81) return gl.getShaderParameter(s.obj, gl.COMPILE_STATUS) ? 1 : 0;
+    if (pname === 0x8B84) return (s.log ? s.log.length + 1 : 0);
+    if (pname === 0x8B4F) return s.type;
+    return 0;
+  };
+
+  G.getShaderInfoLog = function (id) {
+    var s = shaders[id];
+    return s ? (s.log || gl.getShaderInfoLog(s.obj) || '') : '';
+  };
+
+  G.deleteShader = function (id) {
+    var s = shaders[id];
+    if (s && gl) gl.deleteShader(s.obj);
+    delete shaders[id];
+  };
+
+  // Program
+  G.createProgram = function () {
+    if (!gl) return 0;
+    var p = gl.createProgram();
+    if (!p) return 0;
+    var id = nextProgId++;
+    programs[id] = { obj: p, log: '' };
+    return id;
+  };
+
+  G.attachShader = function (pid, sid) {
+    var p = programs[pid], s = shaders[sid];
+    if (p && s && gl) gl.attachShader(p.obj, s.obj);
+  };
+
+  G.detachShader = function (pid, sid) {
+    var p = programs[pid], s = shaders[sid];
+    if (p && s && gl) gl.detachShader(p.obj, s.obj);
+  };
+
+  G.linkProgram = function (pid) {
+    var p = programs[pid];
+    if (!p || !gl) return;
+    gl.linkProgram(p.obj);
+    var ok = gl.getProgramParameter(p.obj, gl.LINK_STATUS);
+    p.log = gl.getProgramInfoLog(p.obj) || '';
+    if (!ok) console.error('[JARJS GL] Program 链接错误: ' + p.log);
+  };
+
+  G.validateProgram = function (pid) {
+    var p = programs[pid];
+    if (p && gl) { gl.validateProgram(p.obj); p.log = gl.getProgramInfoLog(p.obj) || ''; }
+  };
+
+  G.getProgrami = function (pid, pname) {
+    var p = programs[pid];
+    if (!p || !gl) return 0;
+    if (pname === 0x8B82) return gl.getProgramParameter(p.obj, gl.LINK_STATUS) ? 1 : 0;
+    if (pname === 0x8B83) return gl.getProgramParameter(p.obj, gl.VALIDATE_STATUS) ? 1 : 0;
+    if (pname === 0x8B84) return (p.log ? p.log.length + 1 : 0);
+    return 0;
+  };
+
+  G.getProgramInfoLog = function (pid) {
+    var p = programs[pid];
+    return p ? (p.log || gl.getProgramInfoLog(p.obj) || '') : '';
+  };
+
+  G.useProgram = function (pid) {
+    if (!gl) return;
+    if (pid === 0) {
+      if (prog) gl.useProgram(prog);
+    } else {
+      var p = programs[pid];
+      if (p) gl.useProgram(p.obj);
+    }
+  };
+
+  G.deleteProgram = function (pid) {
+    var p = programs[pid];
+    if (p && gl) gl.deleteProgram(p.obj);
+    delete programs[pid];
+  };
+
+  // Uniform
+  G.getUniformLocation = function (pid, name) {
+    var p = programs[pid];
+    if (!p || !gl) return -1;
+    var uLoc = gl.getUniformLocation(p.obj, name);
+    if (uLoc === null) return -1;
+    var lid = nextLocId++;
+    locations[lid] = uLoc;
+    return lid;
+  };
+
+  G.uniform1i = function (lid, v) { var l = locations[lid]; if (l && gl) gl.uniform1i(l, v); };
+  G.uniform2i = function (lid, v0, v1) { var l = locations[lid]; if (l && gl) gl.uniform2i(l, v0, v1); };
+  G.uniform3i = function (lid, v0, v1, v2) { var l = locations[lid]; if (l && gl) gl.uniform3i(l, v0, v1, v2); };
+  G.uniform4i = function (lid, v0, v1, v2, v3) { var l = locations[lid]; if (l && gl) gl.uniform4i(l, v0, v1, v2, v3); };
+
+  G.uniform1f = function (lid, v) { var l = locations[lid]; if (l && gl) gl.uniform1f(l, v); };
+  G.uniform2f = function (lid, v0, v1) { var l = locations[lid]; if (l && gl) gl.uniform2f(l, v0, v1); };
+  G.uniform3f = function (lid, v0, v1, v2) { var l = locations[lid]; if (l && gl) gl.uniform3f(l, v0, v1, v2); };
+  G.uniform4f = function (lid, v0, v1, v2, v3) { var l = locations[lid]; if (l && gl) gl.uniform4f(l, v0, v1, v2, v3); };
+
+  G.uniform1fv = function (lid, arr) { var l = locations[lid]; if (l && gl) gl.uniform1fv(l, new Float32Array(arr)); };
+  G.uniform2fv = function (lid, arr) { var l = locations[lid]; if (l && gl) gl.uniform2fv(l, new Float32Array(arr)); };
+  G.uniform3fv = function (lid, arr) { var l = locations[lid]; if (l && gl) gl.uniform3fv(l, new Float32Array(arr)); };
+  G.uniform4fv = function (lid, arr) { var l = locations[lid]; if (l && gl) gl.uniform4fv(l, new Float32Array(arr)); };
+
+  G.uniformMatrix2fv = function (lid, t, m) { var l = locations[lid]; if (l && gl) gl.uniformMatrix2fv(l, !!t, new Float32Array(m)); };
+  G.uniformMatrix3fv = function (lid, t, m) { var l = locations[lid]; if (l && gl) gl.uniformMatrix3fv(l, !!t, new Float32Array(m)); };
+  G.uniformMatrix4fv = function (lid, t, m) { var l = locations[lid]; if (l && gl) gl.uniformMatrix4fv(l, !!t, new Float32Array(m)); };
+
+  // Attribute
+  G.getAttribLocation = function (pid, name) {
+    var p = programs[pid];
+    return (p && gl) ? gl.getAttribLocation(p.obj, name) : -1;
+  };
+
+  G.bindAttribLocation = function (pid, index, name) {
+    var p = programs[pid];
+    if (p && gl) gl.bindAttribLocation(p.obj, index, name);
+  };
+
+  G.enableVertexAttribArray = function (idx) { if (gl) gl.enableVertexAttribArray(idx); };
+  G.disableVertexAttribArray = function (idx) { if (gl) gl.disableVertexAttribArray(idx); };
+
+  G.vertexAttribPointer = function (idx, size, type, norm, stride, offset) {
+    if (gl) gl.vertexAttribPointer(idx, size, type, !!norm, stride, offset);
+  };
+
+  G.vertexAttrib1f = function (idx, x) { if (gl) gl.vertexAttrib1f(idx, x); };
+  G.vertexAttrib2f = function (idx, x, y) { if (gl) gl.vertexAttrib2f(idx, x, y); };
+  G.vertexAttrib3f = function (idx, x, y, z) { if (gl) gl.vertexAttrib3f(idx, x, y, z); };
+  G.vertexAttrib4f = function (idx, x, y, z, w) { if (gl) gl.vertexAttrib4f(idx, x, y, z, w); };
+
+  // Buffer Objects (GL15)
+  G.createBuffer = function () {
+    if (!gl) return 0;
+    var b = gl.createBuffer();
+    if (!b) return 0;
+    var id = nextBufId++;
+    buffers[id] = b;
+    return id;
+  };
+
+  G.bindBuffer = function (target, id) {
+    if (!gl) return;
+    gl.bindBuffer(target, id ? buffers[id] : null);
+  };
+
+  G.bufferDataFloat = function (target, arr, usage) {
+    if (!gl) return;
+    gl.bufferData(target, new Float32Array(arr), usage);
+  };
+
+  G.bufferDataInt = function (target, arr, usage) {
+    if (!gl) return;
+    gl.bufferData(target, new Int32Array(arr), usage);
+  };
+
+  G.bufferDataShort = function (target, arr, usage) {
+    if (!gl) return;
+    gl.bufferData(target, new Int16Array(arr), usage);
+  };
+
+  G.bufferDataByte = function (target, arr, usage) {
+    if (!gl) return;
+    gl.bufferData(target, new Uint8Array(arr), usage);
+  };
+
+  G.bufferSubDataFloat = function (target, offset, arr) {
+    if (!gl) return;
+    gl.bufferSubData(target, offset, new Float32Array(arr));
+  };
+
+  G.deleteBuffer = function (id) {
+    var b = buffers[id];
+    if (b && gl) gl.deleteBuffer(b);
+    delete buffers[id];
+  };
+
+  // 原生 Draw
+  G.drawArraysNative = function (mode, first, count) {
+    if (gl && count > 0) gl.drawArrays(mode, first, count);
+  };
+
+  G.drawElementsNative = function (mode, count, type, offset) {
+    if (gl && count > 0) gl.drawElements(mode, count, type, offset);
+  };
+
+  // Framebuffer (GL30)
+  G.createFramebuffer = function () {
+    if (!gl) return 0;
+    var fb = gl.createFramebuffer();
+    if (!fb) return 0;
+    var id = nextFboId++;
+    framebuffers[id] = fb;
+    return id;
+  };
+
+  G.bindFramebuffer = function (target, id) {
+    if (!gl) return;
+    gl.bindFramebuffer(target, id ? framebuffers[id] : null);
+  };
+
+  G.framebufferTexture2D = function (target, attach, textarget, texId, level) {
+    if (!gl) return;
+    var t = textures[texId];
+    gl.framebufferTexture2D(target, attach, textarget, t ? t.tex : null, level);
+  };
+
+  G.checkFramebufferStatus = function (target) {
+    return gl ? gl.checkFramebufferStatus(target) : 0;
+  };
+
+  G.deleteFramebuffer = function (id) {
+    var fb = framebuffers[id];
+    if (fb && gl) gl.deleteFramebuffer(fb);
+    delete framebuffers[id];
+  };
+
+  // ---------- 查询与系统 ----------
   G.getString = function (name) {
     if (!gl) return 'JARJS-GL (no context)';
     if (name === 0x1F00) return gl.getParameter(gl.VENDOR) || 'WebGL';
     if (name === 0x1F01) return gl.getParameter(gl.RENDERER) || 'WebGL';
-    if (name === 0x1F02) return 'OpenGL ES 2.0 (JARJS 固定管线兼容层)';
+    if (name === 0x1F02) return 'OpenGL ES 2.0 (JARJS 现代管线兼容层)';
     if (name === 0x1F03) return (gl.getSupportedExtensions() || []).join(' ');
+    if (name === 0x8B8C) return gl.getParameter(gl.SHADING_LANGUAGE_VERSION) || 'WebGL GLSL ES 1.0';
     return '';
   };
 
@@ -265,7 +567,6 @@
   G.requestClose = function () { closeRequested = true; };
 
   // ---------- 输入 ----------
-  // 浏览器 keyCode → LWJGL 键码
   var KEYMAP = {
     8: 14, 9: 15, 12: 0x4C, 13: 28, 16: 42, 17: 29, 18: 56, 19: 197,
     20: 58, 27: 1, 32: 57, 33: 201, 34: 209, 35: 207, 36: 199, 37: 203,
@@ -347,6 +648,13 @@
   G.setCursorPosition = function (x, y) { mouse.x = x; mouse.y = y; };
 
   G.debugStats = function () {
-    return { width: canvas ? canvas.width : 0, height: canvas ? canvas.height : 0, textures: Object.keys(textures).length };
+    return {
+      width: canvas ? canvas.width : 0,
+      height: canvas ? canvas.height : 0,
+      textures: Object.keys(textures).length,
+      programs: Object.keys(programs).length,
+      shaders: Object.keys(shaders).length,
+      buffers: Object.keys(buffers).length
+    };
   };
 })();
